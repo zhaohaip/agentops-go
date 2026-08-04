@@ -1,0 +1,23 @@
+# AgentOps Runtime reads infrastructure configuration from this file when no
+# explicit -config path is supplied. Environment variables are not expanded.
+runtime:
+  lock_check_interval: 5s
+  lock_check_timeout: 2s
+
+postgresql:
+  # 三个身份必须连接同一 Database，且用户名必须互不相同。所有值都按 Secret 处理。
+  migration_dsn: postgresql://agentops_migration:123456@127.0.0.1:5432/zhp?sslmode=disable
+  runtime_write_dsn: postgresql://agentops_runtime_write:123456@127.0.0.1:5432/zhp?sslmode=disable
+  runtime_read_dsn: postgresql://agentops_runtime_read:123456@127.0.0.1:5432/zhp?sslmode=disable
+
+
+http:
+  address: 127.0.0.1:8080
+  read_header_timeout: 5s
+
+logger:
+  level: info
+  format: json
+
+shutdown:
+  timeout: 10s
