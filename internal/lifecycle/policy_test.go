@@ -46,6 +46,25 @@ func TestTaskTransitions(t *testing.T) {
 	}
 }
 
+func TestCreateTaskInitialState(t *testing.T) {
+	t.Parallel()
+	policy := New()
+	if decision := policy.CanCreateTask(
+		contracts.TaskStatusPending,
+		contracts.RunStatusPending,
+		contracts.TaskExecutionStatusQueued,
+	); !decision.Allowed {
+		t.Fatalf("CanCreateTask(valid) = %+v, want allowed", decision)
+	}
+	if decision := policy.CanCreateTask(
+		contracts.TaskStatusRunning,
+		contracts.RunStatusPending,
+		contracts.TaskExecutionStatusQueued,
+	); decision.Allowed || decision.Reason != RejectionInvalidState {
+		t.Fatalf("CanCreateTask(invalid) = %+v, want invalid state", decision)
+	}
+}
+
 func TestExecutionTransitions(t *testing.T) {
 	t.Parallel()
 	policy := New()

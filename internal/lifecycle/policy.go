@@ -34,6 +34,19 @@ func New() Policy {
 	return Policy{}
 }
 
+// CanCreateTask 校验新建 Task 的冻结初始状态组合。
+func (Policy) CanCreateTask(
+	taskStatus contracts.TaskStatus,
+	runStatus contracts.RunStatus,
+	executionStatus contracts.TaskExecutionStatus,
+) Decision {
+	if taskStatus != contracts.TaskStatusPending || runStatus != contracts.RunStatusPending ||
+		executionStatus != contracts.TaskExecutionStatusQueued {
+		return rejected(RejectionInvalidState)
+	}
+	return allowed()
+}
+
 // GuardFacts 是所有会推进当前执行的共享版本、所有权和 deadline 事实。
 type GuardFacts struct {
 	CurrentExecutionVersion contracts.ExecutionVersion
