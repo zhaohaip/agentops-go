@@ -7,10 +7,11 @@ import (
 	"github.com/zhaohaip/agentops-go/internal/contracts"
 )
 
-// AgentRuntimeConfig 是 Create 与 Claim 使用的已冻结 Agent 配置投影。
+// AgentRuntimeConfig 是 Create、Claim 与 Execute 使用的已冻结 Agent 配置投影。
 type AgentRuntimeConfig struct {
-	TaskTimeout     time.Duration
-	ExecutionConfig contracts.ExecutionConfigV1
+	TaskTimeout                 time.Duration
+	ExecutionConfig             contracts.ExecutionConfigV1
+	PlanningToolCatalogSelector contracts.PlanningToolCatalogSelector
 }
 
 // AgentConfigSource 只返回已经通过启动校验的静态 Agent 配置。
@@ -38,7 +39,7 @@ type SaveRuntimeCheckpointRequest struct {
 	CreatedAt           time.Time
 }
 
-// RuntimeCheckpoint 是领取门禁使用的已验证 Checkpoint 投影。
+// RuntimeCheckpoint 是领取与执行派发门禁使用的已验证 Checkpoint 投影。
 type RuntimeCheckpoint struct {
 	CheckpointID        contracts.CheckpointID
 	TaskID              contracts.TaskID
@@ -47,6 +48,8 @@ type RuntimeCheckpoint struct {
 	ExecutionConfigHash contracts.ExecutionConfigHash
 	NextAction          contracts.CheckpointNextAction
 	CheckpointSequence  int64
+	ResolvedReferences  contracts.CanonicalResolvedReferences
+	ApprovalContext     *contracts.ApprovalContext
 }
 
 // ClaimCheckpointResult 是 Checkpoint Port 的封闭领取结果。
@@ -79,4 +82,30 @@ type RuntimeCheckpointPort interface {
 		contracts.ExecutionVersion,
 		ClaimCheckpointSource,
 	) (ClaimCheckpointResult, error)
+	LoadLatestForExecutionDispatch(
+		context.Context,
+		contracts.RuntimeWriteTx,
+		contracts.TaskID,
+		contracts.RunID,
+		contracts.ExecutionVersion,
+	) (ExecutionCheckpointResult, error)
 }
+
+// ExecutionCheckpointResult 是执行派发所需最大 Checkpoint 的封闭校验结果。
+type ExecutionCheckpointResult interface {
+	isExecutionCheckpointResult()
+}
+
+// ExecutionCheckpointValid 表示当前版本最大 Checkpoint 已通过持久化校验。
+type ExecutionCheckpointValid struct {
+	Checkpoint RuntimeCheckpoint
+}
+
+func (ExecutionCheckpointValid) isExecutionCheckpointResult() {}
+
+// ExecutionCheckpointInvalid 表示最大 Checkpoint 缺失或损坏。
+type ExecutionCheckpointInvalid struct {
+	ReasonCode contracts.ReasonCode
+}
+
+func (ExecutionCheckpointInvalid) isExecutionCheckpointResult() {}

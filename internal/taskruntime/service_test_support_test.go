@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -590,6 +591,29 @@ func (p *fakeCheckpointPort) LoadLatestForClaim(
 	return taskruntime.ClaimCheckpointValid{Checkpoint: *latest}, nil
 }
 
+func (p *fakeCheckpointPort) LoadLatestForExecutionDispatch(
+	ctx context.Context,
+	token contracts.RuntimeWriteTx,
+	taskID contracts.TaskID,
+	runID contracts.RunID,
+	version contracts.ExecutionVersion,
+) (taskruntime.ExecutionCheckpointResult, error) {
+	result, err := p.LoadLatestForClaim(
+		ctx, token, taskID, runID, version, taskruntime.ClaimCheckpointSourceContinuation,
+	)
+	if err != nil {
+		return nil, err
+	}
+	switch value := result.(type) {
+	case taskruntime.ClaimCheckpointValid:
+		return taskruntime.ExecutionCheckpointValid{Checkpoint: value.Checkpoint}, nil
+	case taskruntime.ClaimCheckpointInvalid:
+		return taskruntime.ExecutionCheckpointInvalid{ReasonCode: value.ReasonCode}, nil
+	default:
+		return nil, errors.New("unknown fake Claim Checkpoint result")
+	}
+}
+
 type fakePendingReportWriter struct {
 	fail   error
 	mu     sync.Mutex
@@ -633,7 +657,17 @@ func loadedAgentConfig(t interface {
 	if !exists {
 		t.Fatalf("agent-default missing")
 	}
-	return taskruntime.AgentRuntimeConfig{TaskTimeout: agent.TaskTimeout, ExecutionConfig: agent.ExecutionConfig}
+	allowedTools := make([]string, len(agent.ExecutionConfig.Agent.AllowedTools))
+	for index, tool := range agent.ExecutionConfig.Agent.AllowedTools {
+		allowedTools[index] = string(tool)
+	}
+	return taskruntime.AgentRuntimeConfig{
+		TaskTimeout: agent.TaskTimeout, ExecutionConfig: agent.ExecutionConfig,
+		PlanningToolCatalogSelector: contracts.PlanningToolCatalogSelector{
+			CatalogID: agent.CatalogID, AllowedTools: allowedTools, ExpectedRegistryVersion: "registry-v1",
+			ExpectedSnapshotHash: contracts.CatalogSnapshotHash(strings.Repeat("a", 64)),
+		},
+	}
 }
 
 func fakeRepositoryPorts(repositories *fakeRepositories) (
