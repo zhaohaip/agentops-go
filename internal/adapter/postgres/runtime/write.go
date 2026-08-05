@@ -24,14 +24,8 @@ func (e *writeExecutor) Execute(
 	ctx context.Context,
 	work func(context.Context, contracts.RuntimeWriteTx) error,
 ) error {
-	if e == nil || e.runtime == nil {
-		return errors.New("execute PostgreSQL runtime write: executor is not initialized")
-	}
-	if ctx == nil {
-		return errors.New("execute PostgreSQL runtime write: context is required")
-	}
-	if work == nil {
-		return errors.New("execute PostgreSQL runtime write: work is required")
+	if err := e.validate(ctx, work); err != nil {
+		return err
 	}
 
 	runtime := e.runtime
@@ -42,6 +36,52 @@ func (e *writeExecutor) Execute(
 		return fmt.Errorf("execute PostgreSQL runtime write: %w", err)
 	}
 	defer runtime.releaseGate()
+	return e.executeAcquired(ctx, work)
+}
+
+// TryExecute 仅在没有普通写等待者且 gate 当前空闲时执行附属短事务。
+func (e *writeExecutor) TryExecute(
+	ctx context.Context,
+	work func(context.Context, contracts.RuntimeWriteTx) error,
+) (bool, error) {
+	if err := e.validate(ctx, work); err != nil {
+		return false, err
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
+	runtime := e.runtime
+	if err := runtime.requireAcceptingWrites(); err != nil {
+		return false, fmt.Errorf("try execute PostgreSQL runtime write: %w", err)
+	}
+	if !runtime.tryAcquireGate() {
+		return false, nil
+	}
+	defer runtime.releaseGate()
+	return true, e.executeAcquired(ctx, work)
+}
+
+func (e *writeExecutor) validate(
+	ctx context.Context,
+	work func(context.Context, contracts.RuntimeWriteTx) error,
+) error {
+	if e == nil || e.runtime == nil {
+		return errors.New("execute PostgreSQL runtime write: executor is not initialized")
+	}
+	if ctx == nil {
+		return errors.New("execute PostgreSQL runtime write: context is required")
+	}
+	if work == nil {
+		return errors.New("execute PostgreSQL runtime write: work is required")
+	}
+	return nil
+}
+
+func (e *writeExecutor) executeAcquired(
+	ctx context.Context,
+	work func(context.Context, contracts.RuntimeWriteTx) error,
+) error {
+	runtime := e.runtime
 
 	// gate 是活动事务登记；本次检查与 StopAcceptingWrites 通过 stateMu 线性化。
 	// 检查成功后即使 Host 随后封闭准入，本事务仍由 Close 等待或超时中止。

@@ -544,6 +544,57 @@ func TestWriteTransactionsAreSerialized(t *testing.T) {
 	}
 }
 
+func TestTryWriteReturnsImmediatelyWhileGateIsOccupied(t *testing.T) {
+	environment := newRuntimeTestDatabase(t, "127.0.0.1:0")
+	database := openRuntime(t, environment.config, nil)
+	t.Cleanup(func() { closeRuntime(t, database) })
+	executor := database.WriteExecutor()
+
+	activeEntered := make(chan struct{})
+	releaseActive := make(chan struct{})
+	activeDone := make(chan error, 1)
+	go func() {
+		activeDone <- executor.Execute(context.Background(), func(context.Context, contracts.RuntimeWriteTx) error {
+			close(activeEntered)
+			<-releaseActive
+			return nil
+		})
+	}()
+	<-activeEntered
+
+	var callbackEntered atomic.Bool
+	acquired, err := executor.TryExecute(context.Background(), func(context.Context, contracts.RuntimeWriteTx) error {
+		callbackEntered.Store(true)
+		return nil
+	})
+	if err != nil || acquired {
+		close(releaseActive)
+		t.Fatalf("TryExecute() = %t, %v; want immediate not acquired", acquired, err)
+	}
+	if callbackEntered.Load() {
+		close(releaseActive)
+		t.Fatal("TryExecute callback entered while gate was occupied")
+	}
+
+	close(releaseActive)
+	select {
+	case err := <-activeDone:
+		if err != nil {
+			t.Fatalf("active Execute() error = %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("active Execute did not finish")
+	}
+	acquired, err = executor.TryExecute(context.Background(), func(context.Context, contracts.RuntimeWriteTx) error {
+		callbackEntered.Store(true)
+		return nil
+	})
+	if err != nil || !acquired || !callbackEntered.Load() {
+		t.Fatalf("TryExecute() after release = %t, %v, callback=%t; want successful execution",
+			acquired, err, callbackEntered.Load())
+	}
+}
+
 func TestStopAcceptingWritesIsIdempotentAndLetsAcceptedWriteFinish(t *testing.T) {
 	environment := newRuntimeTestDatabase(t, "127.0.0.1:0")
 	database := openRuntime(t, environment.config, []migration.Migration{{

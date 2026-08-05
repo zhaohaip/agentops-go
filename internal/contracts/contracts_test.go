@@ -486,6 +486,13 @@ func (fakeRuntimeWriteExecutor) Execute(
 	return work(ctx, fakeRuntimeWriteTx{})
 }
 
+func (fakeRuntimeWriteExecutor) TryExecute(
+	ctx context.Context,
+	work func(context.Context, RuntimeWriteTx) error,
+) (bool, error) {
+	return true, work(ctx, fakeRuntimeWriteTx{})
+}
+
 type fakePendingReportWriter struct{}
 
 func (fakePendingReportWriter) EnsurePending(

@@ -70,6 +70,13 @@ func (e *fakeRuntimeWriteExecutor) Execute(
 	return err
 }
 
+func (e *fakeRuntimeWriteExecutor) TryExecute(
+	ctx context.Context,
+	work func(context.Context, contracts.RuntimeWriteTx) error,
+) (bool, error) {
+	return true, e.Execute(ctx, work)
+}
+
 type recordingRepository struct {
 	tx    contracts.RuntimeWriteTx
 	value string

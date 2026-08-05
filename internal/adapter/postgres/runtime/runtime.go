@@ -57,6 +57,8 @@ type Runtime struct {
 	lockCheckInterval time.Duration
 	lockCheckTimeout  time.Duration
 	gate              chan struct{}
+	gateMu            sync.Mutex
+	gateWaiters       int
 	lockConnUse       sync.Mutex
 	failure           chan error
 	monitorDone       chan struct{}
@@ -678,11 +680,34 @@ func (r *Runtime) lockConnectionClosed() bool {
 }
 
 func (r *Runtime) acquireGate(ctx context.Context) error {
+	r.gateMu.Lock()
+	r.gateWaiters++
+	r.gateMu.Unlock()
+
+	var err error
 	select {
 	case <-ctx.Done():
-		return ctx.Err()
+		err = ctx.Err()
 	case <-r.gate:
-		return nil
+	}
+	r.gateMu.Lock()
+	r.gateWaiters--
+	r.gateMu.Unlock()
+	return err
+}
+
+// tryAcquireGate 将普通写等待者优先级和非阻塞 gate 获取放在同一临界区判断。
+func (r *Runtime) tryAcquireGate() bool {
+	r.gateMu.Lock()
+	defer r.gateMu.Unlock()
+	if r.gateWaiters != 0 {
+		return false
+	}
+	select {
+	case <-r.gate:
+		return true
+	default:
+		return false
 	}
 }
 

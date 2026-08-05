@@ -19,4 +19,10 @@ type RuntimeWriteExecutor interface {
 		ctx context.Context,
 		work func(context.Context, RuntimeWriteTx) error,
 	) error
+	// TryExecute 仅在写 gate 空闲且没有普通写等待者时执行附属短事务。
+	// acquired=false 表示调用未排队且 work 未执行；附属写调用方可以直接丢弃。
+	TryExecute(
+		ctx context.Context,
+		work func(context.Context, RuntimeWriteTx) error,
+	) (acquired bool, err error)
 }
