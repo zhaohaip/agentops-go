@@ -15,9 +15,10 @@ migrations/
 └── report/
 ```
 
-Phase 0 的注册集合为空，只由 Framework 创建
-`agentops_schema_migrations` 元数据表。后续模块在自己的 Owner 目录声明
-`migration.Migration`，再由 `registry.go` 显式汇总完整历史。
+Phase 0 的生产注册集合为空，只由 Framework 创建
+`agentops_schema_migrations` 元数据表。领域任务先在自己的 Owner 目录声明并独立测试
+`migration.Migration`；P8-T01 组合根任务再由 `registry.go` 按依赖顺序显式汇总完整历史。
+在此之前，不把尚未完成生产装配的领域 Migration 提前注册到 Host。
 
 规则：
 

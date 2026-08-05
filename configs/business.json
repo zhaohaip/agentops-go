@@ -1,0 +1,174 @@
+{
+  "agents": [
+    {
+      "name": "AgentOps Default",
+      "description": "Default AgentOps runtime agent.",
+      "catalog_id": "kubernetes-default",
+      "task_timeout": "30m",
+      "execution_config": {
+        "schema": "agentops.execution-config",
+        "version": 1,
+        "agent": {
+          "agent_id": "agent-default",
+          "enabled": true,
+          "system_instruction": "You are AgentOps.",
+          "allowed_tools": ["k8s.get_deployment"],
+          "max_steps": 20
+        },
+        "model": {
+          "model_name": "deepseek-chat",
+          "stream": false,
+          "response_format": "json_object",
+          "model_client_contract_version": "model-client-v1",
+          "generation_params_schema_version": 1,
+          "generation_params": {
+            "temperature": 0.2,
+            "top_p": 1,
+            "max_output_tokens": 4096
+          }
+        },
+        "json": {
+          "canonicalization_version": "agentops-json-v1",
+          "max_depth": 16,
+          "max_object_fields": 64,
+          "reject_duplicate_keys": true,
+          "reject_null": true
+        },
+        "safety": {
+          "sanitization_rule_version": "result-sanitization-v1",
+          "safe_summary_max_bytes": 512,
+          "log_string_max_bytes": 256
+        },
+        "planner": {
+          "contract_version": "planner-v1.3",
+          "plan_schema_version": 1,
+          "non_tool_input_contract_version": "non-tool-input-v1",
+          "tool_schema_subset_version": "tool-schema-subset-v1",
+          "repair_policy_version": "single-repair-v1",
+          "allowed_step_types": ["Analysis", "ModelCall", "ToolCall", "Verification"],
+          "final_step_type": "Verification",
+          "sequence_start": 1,
+          "requires_contiguous_sequence": true,
+          "max_repairs": 1,
+          "limits": {
+            "max_task_input_bytes": 16384,
+            "max_agent_prompt_bytes": 32768,
+            "max_tool_description_bytes": 4096,
+            "max_tool_schema_bytes": 65536,
+            "max_planning_tools": 32,
+            "max_initial_prompt_bytes": 262144,
+            "max_repair_prompt_bytes": 393216,
+            "max_model_response_bytes": 1048576,
+            "max_plan_steps": 20,
+            "max_plan_draft_bytes": 262144,
+            "max_step_name_bytes": 128,
+            "max_goal_bytes": 2048,
+            "max_step_input_bytes": 32768,
+            "max_resolved_references_per_step": 256,
+            "max_output_fields": 32,
+            "max_output_field_name_bytes": 64,
+            "max_validation_issues": 32,
+            "max_repair_candidate_summary_bytes": 65536,
+            "planner_model_call_timeout_ms": 60000,
+            "repair_min_model_budget_ms": 15000,
+            "planner_local_safety_margin_ms": 2000
+          }
+        },
+        "step_executor": {
+          "contract_version": "step-executor-v1",
+          "step_input_contract_version": "step-input-v1",
+          "reference_protocol_version": "step-output-ref-v1",
+          "reference_action_mode_version": "reference-action-mode-v1",
+          "output_schema_version": "output-schema-v1",
+          "limits": {
+            "max_resolved_step_input_bytes": 1048576,
+            "max_step_output_bytes": 1048576,
+            "max_model_prompt_bytes": 262144,
+            "max_model_response_bytes": 1048576,
+            "max_resolved_references_per_step": 256,
+            "max_target_path_depth": 16
+          }
+        },
+        "tool_framework": {
+          "contract_version": "tool-framework-v1",
+          "result_contract_version": "tool-framework-result-v1",
+          "tools": [
+            {
+              "name": "k8s.get_deployment",
+              "enabled": true,
+              "description": "Get one Deployment.",
+              "capability_kind": "K8S_GET_DEPLOYMENT",
+              "input_schema": {
+                "additionalProperties": false,
+                "properties": {
+                  "cluster": {"type": "string"},
+                  "deployment": {"type": "string"},
+                  "namespace": {"type": "string"}
+                },
+                "required": ["cluster", "deployment", "namespace"],
+                "type": "object"
+              },
+              "output_schema": {
+                "additionalProperties": false,
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "type": "object"
+              },
+              "risk_level": "Low",
+              "read_only": true,
+              "timeout_ms": 30000
+            }
+          ],
+          "access_policy": {
+            "clusters": [
+              {
+                "cluster_id": "prod",
+                "namespaces": ["default"],
+                "resources": [
+                  {"kind": "Deployment", "verbs": ["get"], "write_fields": []}
+                ]
+              }
+            ],
+            "replicas_policy": {"enabled": false, "min": 0, "max": 0},
+            "image_registry_allowlist": []
+          },
+          "result_limits": {
+            "raw_response_max_bytes": 1048576,
+            "safe_dto_max_bytes": 1048576,
+            "pod_page_limit": 200,
+            "event_page_limit": 200,
+            "container_log_default_lines": 200,
+            "container_log_max_lines": 1000
+          },
+          "event_policy": {
+            "version": "bounded-event-page-v1",
+            "sort_keys": ["event_time_desc", "namespace_asc", "name_asc", "uid_asc"],
+            "candidate_budget_bytes": 983040,
+            "reserve_bytes": 65536,
+            "follow_continue": false
+          },
+          "patch_policy": {
+            "version": "deployment-patch-v1",
+            "response_classification_version": "patch-final-status-v1",
+            "resource_version_test_required": true,
+            "allowed_write_fields": ["image", "replicas"]
+          }
+        },
+        "checkpoint": {
+          "contract_version": "checkpoint-v1.3",
+          "runtime_context_schema_version": 1,
+          "resolved_reference_protocol_version": "step-output-ref-v1",
+          "action_mode_version": "checkpoint-action-mode-v1",
+          "max_resolved_references_per_step": 256,
+          "max_target_path_depth": 16
+        },
+        "approval": {
+          "policy_version": "approval-policy-v1",
+          "required_risk_level": "High",
+          "required_read_only": false,
+          "freeze_resource_version": true
+        }
+      }
+    }
+  ]
+}
