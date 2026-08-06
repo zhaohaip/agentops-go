@@ -41,15 +41,47 @@ type SaveRuntimeCheckpointRequest struct {
 
 // RuntimeCheckpoint 是领取与执行派发门禁使用的已验证 Checkpoint 投影。
 type RuntimeCheckpoint struct {
-	CheckpointID        contracts.CheckpointID
-	TaskID              contracts.TaskID
-	RunID               contracts.RunID
-	ExecutionVersion    contracts.ExecutionVersion
-	ExecutionConfigHash contracts.ExecutionConfigHash
-	NextAction          contracts.CheckpointNextAction
-	CheckpointSequence  int64
-	ResolvedReferences  contracts.CanonicalResolvedReferences
-	ApprovalContext     *contracts.ApprovalContext
+	CheckpointID           contracts.CheckpointID
+	TaskID                 contracts.TaskID
+	RunID                  contracts.RunID
+	ExecutionVersion       contracts.ExecutionVersion
+	ExecutionConfigHash    contracts.ExecutionConfigHash
+	NextAction             contracts.CheckpointNextAction
+	CheckpointSequence     int64
+	ResolvedReferences     contracts.CanonicalResolvedReferences
+	ApprovalContext        *contracts.ApprovalContext
+	SourceExecutionVersion *contracts.ExecutionVersion
+	SourceCheckpointID     *contracts.CheckpointID
+}
+
+// StartupCleanupCheckpointResult 是启动清理所需最大 Checkpoint 的封闭结果。
+type StartupCleanupCheckpointResult interface {
+	isStartupCleanupCheckpointResult()
+}
+
+// StartupCleanupCheckpointValid 表示遗留 Execution 的最大 Checkpoint 已通过持久化校验。
+type StartupCleanupCheckpointValid struct {
+	Checkpoint RuntimeCheckpoint
+}
+
+func (StartupCleanupCheckpointValid) isStartupCleanupCheckpointResult() {}
+
+// StartupCleanupCheckpointInvalid 表示遗留 Execution 的最大 Checkpoint 缺失或损坏。
+type StartupCleanupCheckpointInvalid struct {
+	ReasonCode contracts.ReasonCode
+}
+
+func (StartupCleanupCheckpointInvalid) isStartupCleanupCheckpointResult() {}
+
+// StartupCleanupCheckpointPort 在启动清理事务内验证遗留 Execution 的最大 Checkpoint。
+type StartupCleanupCheckpointPort interface {
+	LoadLatestForStartupCleanup(
+		context.Context,
+		contracts.RuntimeWriteTx,
+		contracts.TaskID,
+		contracts.RunID,
+		contracts.ExecutionVersion,
+	) (StartupCleanupCheckpointResult, error)
 }
 
 // ClaimCheckpointResult 是 Checkpoint Port 的封闭领取结果。

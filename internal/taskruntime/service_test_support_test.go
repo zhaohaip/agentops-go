@@ -17,15 +17,17 @@ import (
 )
 
 type fakeStore struct {
-	tasks            map[contracts.TaskID]taskruntime.Task
-	runs             map[contracts.TaskID]taskruntime.Run
-	executions       map[string]taskruntime.TaskExecution
-	receipts         map[taskruntime.CommandID]taskruntime.CommandReceipt
-	checkpoints      []taskruntime.RuntimeCheckpoint
-	reports          []contracts.EnsurePendingReportRequest
-	logs             []taskruntime.TaskLog
-	terminationSteps map[contracts.TaskID]taskruntime.TerminationStep
-	terminationTools map[contracts.TaskID]taskruntime.TerminationToolExecution
+	tasks               map[contracts.TaskID]taskruntime.Task
+	runs                map[contracts.TaskID]taskruntime.Run
+	executions          map[string]taskruntime.TaskExecution
+	receipts            map[taskruntime.CommandID]taskruntime.CommandReceipt
+	checkpoints         []taskruntime.RuntimeCheckpoint
+	reports             []contracts.EnsurePendingReportRequest
+	logs                []taskruntime.TaskLog
+	terminationSteps    map[contracts.TaskID]taskruntime.TerminationStep
+	terminationTools    map[contracts.TaskID]taskruntime.TerminationToolExecution
+	startupFacts        []taskruntime.StartupCleanupFacts
+	startupApplications []taskruntime.ApplyStartupCleanupRequest
 }
 
 func newFakeStore() *fakeStore {
@@ -63,6 +65,25 @@ func (s *fakeStore) clone() *fakeStore {
 	for key, value := range s.terminationTools {
 		copyStore.terminationTools[key] = value
 	}
+	copyStore.startupFacts = make([]taskruntime.StartupCleanupFacts, len(s.startupFacts))
+	for index, facts := range s.startupFacts {
+		copyStore.startupFacts[index] = facts
+		if facts.Step != nil {
+			step := *facts.Step
+			copyStore.startupFacts[index].Step = &step
+		}
+		if facts.ToolExecution != nil {
+			tool := *facts.ToolExecution
+			copyStore.startupFacts[index].ToolExecution = &tool
+		}
+		if facts.ApprovedRecovery != nil {
+			approval := *facts.ApprovedRecovery
+			approval.FrozenToolInput = append(contracts.FrozenToolInput(nil), facts.ApprovedRecovery.FrozenToolInput...)
+			approval.ObservedValues = append(contracts.ObservedValues(nil), facts.ApprovedRecovery.ObservedValues...)
+			copyStore.startupFacts[index].ApprovedRecovery = &approval
+		}
+	}
+	copyStore.startupApplications = append([]taskruntime.ApplyStartupCleanupRequest(nil), s.startupApplications...)
 	return copyStore
 }
 
@@ -528,11 +549,32 @@ func (s *fakeAgentConfigSource) LookupAgent(agentID contracts.AgentID) (taskrunt
 }
 
 type fakeCheckpointPort struct {
-	overrides map[contracts.TaskID]taskruntime.ClaimCheckpointResult
-	failSave  error
-	failLoad  error
-	mu        sync.Mutex
-	seenTx    []contracts.RuntimeWriteTx
+	overrides        map[contracts.TaskID]taskruntime.ClaimCheckpointResult
+	startupOverrides map[contracts.TaskID]taskruntime.StartupCleanupCheckpointResult
+	failSave         error
+	failLoad         error
+	failStartup      error
+	mu               sync.Mutex
+	seenTx           []contracts.RuntimeWriteTx
+}
+
+func (p *fakeCheckpointPort) LoadLatestForStartupCleanup(
+	_ context.Context,
+	token contracts.RuntimeWriteTx,
+	taskID contracts.TaskID,
+	_ contracts.RunID,
+	_ contracts.ExecutionVersion,
+) (taskruntime.StartupCleanupCheckpointResult, error) {
+	p.mu.Lock()
+	p.seenTx = append(p.seenTx, token)
+	p.mu.Unlock()
+	if p.failStartup != nil {
+		return nil, p.failStartup
+	}
+	if result, exists := p.startupOverrides[taskID]; exists {
+		return result, nil
+	}
+	return taskruntime.StartupCleanupCheckpointInvalid{ReasonCode: contracts.ReasonCodeCheckpointNotFound}, nil
 }
 
 func (p *fakeCheckpointPort) SaveRuntimeCheckpoint(
@@ -633,6 +675,102 @@ type fakePendingReportWriter struct {
 type fakeTerminationRepository struct {
 	repositories *fakeRepositories
 	applyHook    func()
+}
+
+type fakeStartupCleanupRepository struct {
+	repositories *fakeRepositories
+}
+
+func (r *fakeStartupCleanupRepository) LockLegacyRunningExecutions(
+	_ context.Context,
+	token contracts.RuntimeWriteTx,
+	currentWorkerID contracts.WorkerID,
+) ([]taskruntime.StartupCleanupFacts, error) {
+	transaction, err := r.repositories.transaction(token, "startup_cleanup.lock")
+	if err != nil {
+		return nil, err
+	}
+	result := make([]taskruntime.StartupCleanupFacts, 0, len(transaction.store.startupFacts))
+	for _, facts := range transaction.store.startupFacts {
+		if facts.Execution.Status != contracts.TaskExecutionStatusRunning {
+			continue
+		}
+		if facts.Execution.WorkerID != nil && *facts.Execution.WorkerID == currentWorkerID {
+			continue
+		}
+		result = append(result, facts)
+	}
+	return result, nil
+}
+
+func (r *fakeStartupCleanupRepository) ApplyStartupCleanup(
+	_ context.Context,
+	token contracts.RuntimeWriteTx,
+	request taskruntime.ApplyStartupCleanupRequest,
+) (bool, error) {
+	transaction, err := r.repositories.transaction(token, "startup_cleanup.apply")
+	if errors.Is(err, errFakeConditionalMiss) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	for index := range transaction.store.startupFacts {
+		facts := &transaction.store.startupFacts[index]
+		if facts.Task.TaskID != request.TaskID || facts.Execution.ExecutionVersion != request.ExecutionVersion {
+			continue
+		}
+		if facts.Task.CurrentExecutionVersion != request.ExecutionVersion ||
+			facts.Task.Status != request.ExpectedTaskStatus || facts.Run.Status != request.ExpectedRunStatus ||
+			facts.Execution.Status != request.ExpectedExecutionStatus || facts.Execution.WorkerID == nil ||
+			*facts.Execution.WorkerID != request.ExpectedWorkerID || facts.Task.QueuedAt != nil {
+			return false, nil
+		}
+		if request.ExpectedStepStatus != nil && (facts.Step == nil || facts.Step.Status != *request.ExpectedStepStatus) {
+			return false, nil
+		}
+		if request.ExpectedToolStatus != nil &&
+			(facts.ToolExecution == nil || facts.ToolExecution.Status != *request.ExpectedToolStatus) {
+			return false, nil
+		}
+		if request.ToolStatus != nil {
+			if facts.ToolExecution == nil {
+				return false, nil
+			}
+			facts.ToolExecution.Status = *request.ToolStatus
+			facts.ToolExecution.ErrorCode = request.ToolErrorCode
+			facts.ToolExecution.SideEffectUnknown = request.ToolSideEffectUnknown
+			facts.ToolExecution.EndedAt = &request.EndedAt
+		}
+		facts.Execution.ErrorCode = nil
+		if request.ExecutionErrorCode != "" {
+			errorCode := request.ExecutionErrorCode
+			facts.Execution.ErrorCode = &errorCode
+		}
+		facts.Execution.EndedAt = &request.EndedAt
+		if request.Disposition == taskruntime.StartupCleanupInterrupt {
+			facts.Execution.Status = contracts.TaskExecutionStatusInterrupted
+		} else if request.Disposition == taskruntime.StartupCleanupTerminal {
+			facts.Execution.Status = contracts.TaskExecutionStatusFailed
+			facts.Execution.TerminationReason = request.TerminationReason
+			facts.Task.Status = contracts.TaskStatusFailed
+			facts.Task.ErrorCode = request.TaskErrorCode
+			facts.Task.EndedAt = &request.EndedAt
+			facts.Run.Status = contracts.RunStatusFailed
+			facts.Run.ErrorCode = request.TaskErrorCode
+			facts.Run.EndedAt = &request.EndedAt
+			if facts.Step != nil {
+				facts.Step.Status = contracts.StepStatusFailed
+				facts.Step.ErrorCode = request.StepErrorCode
+				facts.Step.EndedAt = &request.EndedAt
+			}
+		} else {
+			return false, errors.New("unknown fake StartupCleanup disposition")
+		}
+		transaction.store.startupApplications = append(transaction.store.startupApplications, request)
+		return true, nil
+	}
+	return false, nil
 }
 
 func (r *fakeTerminationRepository) LockTerminationFacts(
@@ -794,15 +932,17 @@ func fakeRepositoryPorts(repositories *fakeRepositories) (
 }
 
 var (
-	_ contracts.RuntimeWriteExecutor       = (*fakeExecutor)(nil)
-	_ taskruntime.DatabaseClock            = (*fakeRepositories)(nil)
-	_ taskruntime.AgentConfigSource        = (*fakeAgentConfigSource)(nil)
-	_ taskruntime.RuntimeCheckpointPort    = (*fakeCheckpointPort)(nil)
-	_ contracts.PendingReportWriter        = (*fakePendingReportWriter)(nil)
-	_ taskruntime.TaskRepository           = fakeTaskRepository{}
-	_ taskruntime.RunRepository            = fakeRunRepository{}
-	_ taskruntime.TaskExecutionRepository  = fakeExecutionRepository{}
-	_ taskruntime.CommandReceiptRepository = fakeReceiptRepository{}
-	_ taskruntime.TaskLogRepository        = fakeTaskLogRepository{}
-	_ taskruntime.TerminationRepository    = (*fakeTerminationRepository)(nil)
+	_ contracts.RuntimeWriteExecutor           = (*fakeExecutor)(nil)
+	_ taskruntime.DatabaseClock                = (*fakeRepositories)(nil)
+	_ taskruntime.AgentConfigSource            = (*fakeAgentConfigSource)(nil)
+	_ taskruntime.RuntimeCheckpointPort        = (*fakeCheckpointPort)(nil)
+	_ contracts.PendingReportWriter            = (*fakePendingReportWriter)(nil)
+	_ taskruntime.TaskRepository               = fakeTaskRepository{}
+	_ taskruntime.RunRepository                = fakeRunRepository{}
+	_ taskruntime.TaskExecutionRepository      = fakeExecutionRepository{}
+	_ taskruntime.CommandReceiptRepository     = fakeReceiptRepository{}
+	_ taskruntime.TaskLogRepository            = fakeTaskLogRepository{}
+	_ taskruntime.TerminationRepository        = (*fakeTerminationRepository)(nil)
+	_ taskruntime.StartupCleanupRepository     = (*fakeStartupCleanupRepository)(nil)
+	_ taskruntime.StartupCleanupCheckpointPort = (*fakeCheckpointPort)(nil)
 )

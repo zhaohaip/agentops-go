@@ -12,6 +12,8 @@ import (
 
 	postgresruntime "github.com/zhaohaip/agentops-go/internal/adapter/postgres/runtime"
 	"github.com/zhaohaip/agentops-go/internal/config/infra"
+	"github.com/zhaohaip/agentops-go/internal/contracts"
+	"github.com/zhaohaip/agentops-go/internal/taskruntime"
 	"github.com/zhaohaip/agentops-go/migrations"
 )
 
@@ -32,15 +34,35 @@ type databaseRuntime interface {
 
 type databaseFactory func(context.Context) (databaseRuntime, error)
 
+type startupCleaner interface {
+	StartupCleanup(context.Context, contracts.WorkerID) (taskruntime.StartupCleanupSummary, error)
+}
+
 // Host 是 Runtime 进程的组合根和生命周期控制器。
 type Host struct {
 	logger          *slog.Logger
 	shutdownTimeout time.Duration
 	databaseFactory databaseFactory
+	startupCleaner  startupCleaner
+	workerID        contracts.WorkerID
 	components      []component
 
 	mu  sync.Mutex
 	ran bool
+}
+
+func newHostWithStartupCleanup(
+	logger *slog.Logger,
+	shutdownTimeout time.Duration,
+	factory databaseFactory,
+	cleaner startupCleaner,
+	workerID contracts.WorkerID,
+	components ...component,
+) *Host {
+	host := newHostWithDatabase(logger, shutdownTimeout, factory, components...)
+	host.startupCleaner = cleaner
+	host.workerID = workerID
+	return host
 }
 
 // NewHost 初始化 Logger 和 HTTP Server，并装配 PostgreSQL Runtime 工厂。
@@ -120,6 +142,16 @@ func (h *Host) Run(ctx context.Context) error {
 		if err := database.StartMonitoring(); err != nil {
 			shutdownErr := h.shutdownRuntime(nil, database)
 			return errors.Join(fmt.Errorf("start PostgreSQL runtime monitoring: %w", err), shutdownErr)
+		}
+	}
+	if h.startupCleaner != nil {
+		if database == nil || h.workerID == "" {
+			shutdownErr := h.shutdownRuntime(nil, database)
+			return errors.Join(errors.New("run StartupCleanup gate: database and worker ID are required"), shutdownErr)
+		}
+		if _, err := h.startupCleaner.StartupCleanup(ctx, h.workerID); err != nil {
+			shutdownErr := h.shutdownRuntime(nil, database)
+			return errors.Join(fmt.Errorf("run StartupCleanup gate: %w", err), shutdownErr)
 		}
 	}
 

@@ -9,6 +9,9 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/zhaohaip/agentops-go/internal/contracts"
+	"github.com/zhaohaip/agentops-go/internal/taskruntime"
 )
 
 func TestEmptyHostStartsAndStops(t *testing.T) {
@@ -276,6 +279,116 @@ func TestHostPreservesComponentAndDatabaseShutdownErrors(t *testing.T) {
 	if !errors.Is(err, componentErr) || !errors.Is(err, databaseErr) {
 		t.Fatalf("Run() error = %v, want component and database shutdown errors", err)
 	}
+}
+
+func TestHostStartupCleanupGatePrecedesWorkerStart(t *testing.T) {
+	t.Parallel()
+
+	var (
+		eventsMu sync.Mutex
+		events   []string
+	)
+	database := newRecordingDatabase(&eventsMu, &events)
+	cleaner := &recordingStartupCleaner{eventsMu: &eventsMu, events: &events}
+	worker := newRecordingComponent("worker", &eventsMu, &events)
+	host := newHostWithStartupCleanup(testLogger(), time.Second, func(context.Context) (databaseRuntime, error) {
+		return database, nil
+	}, cleaner, "worker-current", worker)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- host.Run(ctx) }()
+	<-worker.started
+	cancel()
+	if err := <-result; err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	eventsMu.Lock()
+	defer eventsMu.Unlock()
+	want := []string{"open:postgres", "migrate", "monitor", "cleanup:worker-current", "start:worker",
+		"seal:postgres", "shutdown:worker", "close:postgres"}
+	if !reflect.DeepEqual(events, want) {
+		t.Fatalf("events = %v, want %v", events, want)
+	}
+}
+
+func TestHostStartupCleanupQueuedRunningInvariantFailurePreventsWorkerStart(t *testing.T) {
+	t.Parallel()
+
+	wantErr := errors.New("legacy RUNNING Task has non-empty queued_at")
+	database := newRecordingDatabase(nil, nil)
+	cleaner := &recordingStartupCleaner{err: wantErr}
+	worker := newRecordingComponent("worker", new(sync.Mutex), new([]string))
+	host := newHostWithStartupCleanup(testLogger(), time.Second, func(context.Context) (databaseRuntime, error) {
+		return database, nil
+	}, cleaner, "worker-current", worker)
+
+	err := host.Run(context.Background())
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("Run() error = %v, want cleanup failure", err)
+	}
+	select {
+	case <-worker.started:
+		t.Fatal("worker started after StartupCleanup failure")
+	default:
+	}
+	if !database.closed {
+		t.Fatal("database was not closed after StartupCleanup failure")
+	}
+}
+
+func TestHostStartupCleanupGateRequiresDatabaseAndWorkerIdentity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		factory  databaseFactory
+		workerID contracts.WorkerID
+	}{
+		{name: "database missing", workerID: "worker-current"},
+		{name: "worker ID missing", factory: func(context.Context) (databaseRuntime, error) {
+			return newRecordingDatabase(nil, nil), nil
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cleaner := &recordingStartupCleaner{}
+			worker := newRecordingComponent("worker", new(sync.Mutex), new([]string))
+			host := newHostWithStartupCleanup(testLogger(), time.Second, test.factory, cleaner, test.workerID, worker)
+			if err := host.Run(context.Background()); err == nil {
+				t.Fatal("Run() error = nil")
+			}
+			if cleaner.calls != 0 {
+				t.Fatalf("cleanup calls = %d, want 0", cleaner.calls)
+			}
+			select {
+			case <-worker.started:
+				t.Fatal("worker started without complete StartupCleanup gate dependencies")
+			default:
+			}
+		})
+	}
+}
+
+type recordingStartupCleaner struct {
+	eventsMu *sync.Mutex
+	events   *[]string
+	err      error
+	calls    int
+}
+
+func (c *recordingStartupCleaner) StartupCleanup(
+	_ context.Context,
+	workerID contracts.WorkerID,
+) (taskruntime.StartupCleanupSummary, error) {
+	c.calls++
+	if c.eventsMu != nil && c.events != nil {
+		c.eventsMu.Lock()
+		*c.events = append(*c.events, "cleanup:"+string(workerID))
+		c.eventsMu.Unlock()
+	}
+	return taskruntime.StartupCleanupSummary{}, c.err
 }
 
 type recordingDatabase struct {
