@@ -17,20 +17,24 @@ import (
 )
 
 type fakeStore struct {
-	tasks       map[contracts.TaskID]taskruntime.Task
-	runs        map[contracts.TaskID]taskruntime.Run
-	executions  map[string]taskruntime.TaskExecution
-	receipts    map[taskruntime.CommandID]taskruntime.CommandReceipt
-	checkpoints []taskruntime.RuntimeCheckpoint
-	reports     []contracts.EnsurePendingReportRequest
-	logs        []taskruntime.TaskLog
+	tasks            map[contracts.TaskID]taskruntime.Task
+	runs             map[contracts.TaskID]taskruntime.Run
+	executions       map[string]taskruntime.TaskExecution
+	receipts         map[taskruntime.CommandID]taskruntime.CommandReceipt
+	checkpoints      []taskruntime.RuntimeCheckpoint
+	reports          []contracts.EnsurePendingReportRequest
+	logs             []taskruntime.TaskLog
+	terminationSteps map[contracts.TaskID]taskruntime.TerminationStep
+	terminationTools map[contracts.TaskID]taskruntime.TerminationToolExecution
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{
 		tasks: make(map[contracts.TaskID]taskruntime.Task), runs: make(map[contracts.TaskID]taskruntime.Run),
-		executions: make(map[string]taskruntime.TaskExecution),
-		receipts:   make(map[taskruntime.CommandID]taskruntime.CommandReceipt),
+		executions:       make(map[string]taskruntime.TaskExecution),
+		receipts:         make(map[taskruntime.CommandID]taskruntime.CommandReceipt),
+		terminationSteps: make(map[contracts.TaskID]taskruntime.TerminationStep),
+		terminationTools: make(map[contracts.TaskID]taskruntime.TerminationToolExecution),
 	}
 }
 
@@ -53,6 +57,12 @@ func (s *fakeStore) clone() *fakeStore {
 	copyStore.checkpoints = append([]taskruntime.RuntimeCheckpoint(nil), s.checkpoints...)
 	copyStore.reports = append([]contracts.EnsurePendingReportRequest(nil), s.reports...)
 	copyStore.logs = append([]taskruntime.TaskLog(nil), s.logs...)
+	for key, value := range s.terminationSteps {
+		copyStore.terminationSteps[key] = value
+	}
+	for key, value := range s.terminationTools {
+		copyStore.terminationTools[key] = value
+	}
 	return copyStore
 }
 
@@ -620,6 +630,109 @@ type fakePendingReportWriter struct {
 	seenTx []contracts.RuntimeWriteTx
 }
 
+type fakeTerminationRepository struct {
+	repositories *fakeRepositories
+	applyHook    func()
+}
+
+func (r *fakeTerminationRepository) LockTerminationFacts(
+	_ context.Context,
+	token contracts.RuntimeWriteTx,
+	taskID contracts.TaskID,
+) (taskruntime.TerminationFacts, error) {
+	transaction, err := r.repositories.transaction(token, "termination.lock")
+	if err != nil {
+		return taskruntime.TerminationFacts{}, err
+	}
+	task, exists := transaction.store.tasks[taskID]
+	if !exists {
+		return taskruntime.TerminationFacts{}, taskruntime.ErrRepositoryNotFound
+	}
+	run, exists := transaction.store.runs[taskID]
+	if !exists {
+		return taskruntime.TerminationFacts{}, taskruntime.ErrRepositoryNotFound
+	}
+	execution, exists := transaction.store.executions[executionKey(taskID, task.CurrentExecutionVersion)]
+	if !exists {
+		return taskruntime.TerminationFacts{}, taskruntime.ErrRepositoryNotFound
+	}
+	facts := taskruntime.TerminationFacts{Task: task, Run: run, Execution: execution}
+	if step, exists := transaction.store.terminationSteps[taskID]; exists {
+		stepCopy := step
+		facts.Step = &stepCopy
+	}
+	if tool, exists := transaction.store.terminationTools[taskID]; exists {
+		toolCopy := tool
+		facts.ToolExecution = &toolCopy
+	}
+	return facts, nil
+}
+
+func (r *fakeTerminationRepository) ApplyTermination(
+	_ context.Context,
+	token contracts.RuntimeWriteTx,
+	request taskruntime.ApplyTerminationRequest,
+) (bool, error) {
+	transaction, err := r.repositories.transaction(token, "termination.apply")
+	if errors.Is(err, errFakeConditionalMiss) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if r.applyHook != nil {
+		r.applyHook()
+	}
+	task, taskExists := transaction.store.tasks[request.TaskID]
+	run, runExists := transaction.store.runs[request.TaskID]
+	executionKey := executionKey(request.TaskID, request.ExpectedExecutionVersion)
+	execution, executionExists := transaction.store.executions[executionKey]
+	if !taskExists || !runExists || !executionExists ||
+		task.CurrentExecutionVersion != request.ExpectedExecutionVersion ||
+		task.Status != request.ExpectedTaskStatus || run.Status != request.ExpectedRunStatus ||
+		execution.Status != request.ExpectedExecutionStatus {
+		return false, nil
+	}
+	if request.ExpectedStepStatus != nil {
+		step, exists := transaction.store.terminationSteps[request.TaskID]
+		if !exists || step.Status != *request.ExpectedStepStatus {
+			return false, nil
+		}
+		step.Status = contracts.StepStatusFailed
+		step.ErrorCode = &request.StepErrorCode
+		step.EndedAt = &request.EndedAt
+		transaction.store.terminationSteps[request.TaskID] = step
+	}
+	if request.ExpectedToolStatus != nil {
+		tool, exists := transaction.store.terminationTools[request.TaskID]
+		if !exists || tool.Status != *request.ExpectedToolStatus || request.ToolStatus == nil {
+			return false, nil
+		}
+		tool.Status = *request.ToolStatus
+		tool.ErrorCode = request.ToolErrorCode
+		tool.SideEffectUnknown = request.ToolSideEffectUnknown
+		tool.EndedAt = &request.EndedAt
+		transaction.store.terminationTools[request.TaskID] = tool
+	}
+	task.Status = request.TaskStatus
+	task.ErrorCode = &request.TaskErrorCode
+	task.QueuedAt = nil
+	task.EndedAt = &request.EndedAt
+	transaction.store.tasks[request.TaskID] = task
+	run.Status = contracts.RunStatusFailed
+	run.ErrorCode = &request.RunErrorCode
+	run.EndedAt = &request.EndedAt
+	transaction.store.runs[request.TaskID] = run
+	execution.Status = contracts.TaskExecutionStatusFailed
+	execution.ErrorCode = request.ExecutionErrorCode
+	execution.TerminationReason = &request.TerminationReason
+	if !request.PreserveExecutionEndedAt {
+		execution.EndedAt = &request.EndedAt
+	}
+	transaction.store.executions[executionKey] = execution
+	return true, nil
+}
+
 func (w *fakePendingReportWriter) EnsurePending(
 	_ context.Context,
 	token contracts.RuntimeWriteTx,
@@ -691,4 +804,5 @@ var (
 	_ taskruntime.TaskExecutionRepository  = fakeExecutionRepository{}
 	_ taskruntime.CommandReceiptRepository = fakeReceiptRepository{}
 	_ taskruntime.TaskLogRepository        = fakeTaskLogRepository{}
+	_ taskruntime.TerminationRepository    = (*fakeTerminationRepository)(nil)
 )
