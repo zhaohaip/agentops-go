@@ -70,6 +70,36 @@ func (r *TaskRepository) Find(ctx context.Context, taskID contracts.TaskID) (dom
 	return scanTask(r.reader.QueryRow(ctx, taskSelectSQL+" WHERE task_id = $1", taskID))
 }
 
+// List 按可选状态过滤，并按创建时间倒序、Task ID 升序返回 Task。
+func (r *TaskRepository) List(ctx context.Context, status *contracts.TaskStatus) ([]domain.Task, error) {
+	if r == nil || r.reader == nil {
+		return nil, errors.New("list Tasks: read pool is not initialized")
+	}
+	query := taskSelectSQL + " ORDER BY created_at DESC, task_id ASC"
+	var args []any
+	if status != nil {
+		query = taskSelectSQL + " WHERE status = $1 ORDER BY created_at DESC, task_id ASC"
+		args = append(args, *status)
+	}
+	rows, err := r.reader.Query(ctx, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make([]domain.Task, 0)
+	for rows.Next() {
+		task, err := scanTask(rows)
+		if err != nil {
+			return nil, err
+		}
+		result = append(result, task)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return result, nil
+}
+
 // Lock 在调用方事务内锁定 Task。
 func (*TaskRepository) Lock(ctx context.Context, token contracts.RuntimeWriteTx, taskID contracts.TaskID) (domain.Task, error) {
 	var result domain.Task

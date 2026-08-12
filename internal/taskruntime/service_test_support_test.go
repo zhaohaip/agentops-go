@@ -235,6 +235,23 @@ func (r *fakeRepositories) Find(_ context.Context, taskID contracts.TaskID) (tas
 	return task, nil
 }
 
+func (r *fakeRepositories) List(_ context.Context, status *contracts.TaskStatus) ([]taskruntime.Task, error) {
+	store := r.executor.snapshot()
+	result := make([]taskruntime.Task, 0, len(store.tasks))
+	for _, task := range store.tasks {
+		if status == nil || task.Status == *status {
+			result = append(result, task)
+		}
+	}
+	sort.Slice(result, func(left, right int) bool {
+		if !result[left].CreatedAt.Equal(result[right].CreatedAt) {
+			return result[left].CreatedAt.After(result[right].CreatedAt)
+		}
+		return result[left].TaskID < result[right].TaskID
+	})
+	return result, nil
+}
+
 func (r *fakeRepositories) Lock(_ context.Context, tx contracts.RuntimeWriteTx, taskID contracts.TaskID) (taskruntime.Task, error) {
 	transaction, err := r.transaction(tx, "task.lock")
 	if err != nil {
@@ -337,6 +354,10 @@ func (r fakeTaskRepository) Insert(ctx context.Context, tx contracts.RuntimeWrit
 }
 func (r fakeTaskRepository) Find(ctx context.Context, id contracts.TaskID) (taskruntime.Task, error) {
 	return r.repositories.Find(ctx, id)
+}
+
+func (r fakeTaskRepository) List(ctx context.Context, status *contracts.TaskStatus) ([]taskruntime.Task, error) {
+	return r.repositories.List(ctx, status)
 }
 func (r fakeTaskRepository) Lock(ctx context.Context, tx contracts.RuntimeWriteTx, id contracts.TaskID) (taskruntime.Task, error) {
 	return r.repositories.Lock(ctx, tx, id)

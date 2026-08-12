@@ -235,6 +235,89 @@ func TestCloseTimeoutInterruptsBlockedQueryRowScan(t *testing.T) {
 	}
 }
 
+func TestSnapshotQueryRowLinearizesWithForcedClose(t *testing.T) {
+	environment := newRuntimeTestDatabase(t, "127.0.0.1:0")
+	database := openRuntime(t, environment.config, nil)
+	admin := connect(t, environment.database.DSN)
+
+	const lockKey int64 = 0x536e6170526f7753
+	if _, err := admin.Exec(context.Background(), "SELECT pg_advisory_lock($1)", lockKey); err != nil {
+		t.Fatalf("acquire blocking advisory lock: %v", err)
+	}
+	defer func() { _, _ = admin.Exec(context.Background(), "SELECT pg_advisory_unlock($1)", lockKey) }()
+
+	snapshotAdmitted := make(chan struct{})
+	allowQueryRow := make(chan struct{})
+	queryRowReturned := make(chan struct{})
+	snapshotResult := make(chan error, 1)
+	go func() {
+		snapshotResult <- database.ReadPool().WithSnapshot(
+			context.Background(),
+			func(ctx context.Context, snapshot postgresruntime.ReadSnapshot) error {
+				close(snapshotAdmitted)
+				select {
+				case <-allowQueryRow:
+				case <-ctx.Done():
+					// Deliberately continue: this exercises QueryRow admission after
+					// shutdown cancellation has raced with the admitted snapshot.
+				}
+				row := snapshot.QueryRow(
+					"SELECT pg_advisory_lock($1) /* agentops_snapshot_query_row_close */",
+					lockKey,
+				)
+				close(queryRowReturned)
+				var ignored any
+				return row.Scan(&ignored)
+			},
+		)
+	}()
+	select {
+	case <-snapshotAdmitted:
+	case <-time.After(time.Second):
+		t.Fatal("snapshot was not admitted")
+	}
+
+	closeResult := make(chan error, 1)
+	closeCtx, cancelClose := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelClose()
+	go func() { closeResult <- database.Close(closeCtx) }()
+	waitForReadRejection(t, database)
+	close(allowQueryRow)
+	waitForReaderWaitEvent(t, admin, environment.identities.RuntimeReadRole(), "agentops_snapshot_query_row_close")
+
+	forcedAt := time.Now()
+	cancelClose()
+
+	select {
+	case err := <-closeResult:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("Close() error = %v, want context canceled", err)
+		}
+	case <-time.After(forcedReadCloseUpperBound):
+		t.Fatal("Close() exceeded the forced read close upper bound")
+	}
+	if elapsed := time.Since(forcedAt); elapsed > forcedReadCloseUpperBound {
+		t.Fatalf("Close() duration after force = %s, want <= %s", elapsed, forcedReadCloseUpperBound)
+	}
+	select {
+	case <-queryRowReturned:
+	case <-time.After(time.Second):
+		t.Fatal("snapshot QueryRow call remained blocked after Close() returned")
+	}
+	select {
+	case err := <-snapshotResult:
+		if err == nil {
+			t.Fatal("snapshot QueryRow succeeded after forced close")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("snapshot QueryRow remained active after Close() returned")
+	}
+	assertNoReaderSessions(t, admin, environment.identities.RuntimeReadRole())
+
+	second := openRuntime(t, environment.config, nil)
+	closeRuntime(t, second)
+}
+
 func TestQueryRowCompletionPathsReleaseReadRegistration(t *testing.T) {
 	environment := newRuntimeTestDatabase(t, "127.0.0.1:0")
 	database := openRuntime(t, environment.config, nil)

@@ -78,6 +78,7 @@ type QueueCandidate struct {
 type TaskRepository interface {
 	Insert(context.Context, contracts.RuntimeWriteTx, Task) error
 	Find(context.Context, contracts.TaskID) (Task, error)
+	List(context.Context, *contracts.TaskStatus) ([]Task, error)
 	Lock(context.Context, contracts.RuntimeWriteTx, contracts.TaskID) (Task, error)
 	LockNextQueueCandidate(context.Context, contracts.RuntimeWriteTx) (QueueCandidate, error)
 	Update(context.Context, contracts.RuntimeWriteTx, TaskUpdate) (bool, error)

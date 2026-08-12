@@ -127,6 +127,12 @@ func (o *readOperation) attachRows(rows pgx.Rows) {
 	o.mu.Unlock()
 }
 
+func (o *readOperation) clearRows() {
+	o.mu.Lock()
+	o.rows = nil
+	o.mu.Unlock()
+}
+
 func (o *readOperation) isDone() bool {
 	o.mu.Lock()
 	defer o.mu.Unlock()

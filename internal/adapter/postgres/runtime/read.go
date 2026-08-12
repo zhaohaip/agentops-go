@@ -20,6 +20,19 @@ type Rows interface {
 	Scan(...any) error
 }
 
+// Row 是不会暴露 pgx 类型的单行只读结果。
+type Row interface {
+	Scan(...any) error
+}
+
+// ReadSnapshot 是一个 PostgreSQL REPEATABLE READ 只读事务内的查询能力。
+//
+// 该接口仅供 PostgreSQL Adapter 组合一致查询投影，不进入业务契约层。
+type ReadSnapshot interface {
+	Query(string, ...any) (Rows, error)
+	QueryRow(string, ...any) Row
+}
+
 // ReadPool 仅暴露 PostgreSQL 查询能力。
 //
 // 底层每条普通连接都验证未切换登录身份并设置 default_transaction_read_only=on；
@@ -69,7 +82,7 @@ func (p *ReadPool) Query(ctx context.Context, sql string, args ...any) (Rows, er
 }
 
 // QueryRow 执行返回单行的只读查询。
-func (p *ReadPool) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+func (p *ReadPool) QueryRow(ctx context.Context, sql string, args ...any) Row {
 	if p == nil || p.pool == nil || p.lifecycle == nil {
 		return errorRow{err: errors.New("query PostgreSQL read pool: pool is not initialized")}
 	}
@@ -92,6 +105,39 @@ func (p *ReadPool) QueryRow(ctx context.Context, sql string, args ...any) pgx.Ro
 	row := tx.QueryRow(operation.ctx, sql, args...)
 	operation.useMu.Unlock()
 	return &readRow{row: row, operation: operation}
+}
+
+// WithSnapshot 在一个 REPEATABLE READ 只读事务快照内执行组合查询。
+func (p *ReadPool) WithSnapshot(
+	ctx context.Context,
+	work func(context.Context, ReadSnapshot) error,
+) (result error) {
+	if p == nil || p.pool == nil || p.lifecycle == nil {
+		return errors.New("open PostgreSQL read snapshot: pool is not initialized")
+	}
+	if work == nil {
+		return errors.New("open PostgreSQL read snapshot: work is required")
+	}
+	operation, err := p.lifecycle.begin(ctx)
+	if err != nil {
+		return fmt.Errorf("open PostgreSQL read snapshot: %w", err)
+	}
+	defer func() {
+		result = errors.Join(result, operation.finish())
+	}()
+
+	operation.useMu.Lock()
+	tx, err := p.pool.BeginTx(operation.ctx, pgx.TxOptions{
+		IsoLevel:   pgx.RepeatableRead,
+		AccessMode: pgx.ReadOnly,
+	})
+	if err != nil {
+		operation.useMu.Unlock()
+		return fmt.Errorf("open PostgreSQL read snapshot: begin transaction: %w", err)
+	}
+	operation.attachTransaction(tx)
+	operation.useMu.Unlock()
+	return work(operation.ctx, &readSnapshot{tx: tx, operation: operation})
 }
 
 // Exec 为通用数据库调用方提供 fail-closed 边界，并无条件拒绝执行。
@@ -153,6 +199,104 @@ func (r *readRows) Scan(destinations ...any) error {
 type readRow struct {
 	row       pgx.Row
 	operation *readOperation
+}
+
+type readSnapshot struct {
+	tx        pgx.Tx
+	operation *readOperation
+}
+
+func (s *readSnapshot) Query(sql string, args ...any) (Rows, error) {
+	s.operation.useMu.Lock()
+	if s.operation.isDone() {
+		s.operation.useMu.Unlock()
+		return nil, errors.Join(s.operation.ctx.Err(), s.operation.error())
+	}
+	rows, err := s.tx.Query(s.operation.ctx, sql, args...)
+	if err != nil {
+		s.operation.useMu.Unlock()
+		return nil, err
+	}
+	s.operation.attachRows(rows)
+	s.operation.useMu.Unlock()
+	return &snapshotRows{rows: rows, operation: s.operation}, nil
+}
+
+func (s *readSnapshot) QueryRow(sql string, args ...any) Row {
+	s.operation.useMu.Lock()
+	defer s.operation.useMu.Unlock()
+	if s.operation.isDone() {
+		return errorRow{err: errors.Join(s.operation.ctx.Err(), s.operation.error())}
+	}
+	return &snapshotRow{row: s.tx.QueryRow(s.operation.ctx, sql, args...), operation: s.operation}
+}
+
+type snapshotRows struct {
+	rows      pgx.Rows
+	operation *readOperation
+	closed    bool
+}
+
+func (r *snapshotRows) Close() {
+	r.operation.useMu.Lock()
+	r.closeLocked()
+	r.operation.useMu.Unlock()
+}
+
+func (r *snapshotRows) Err() error {
+	r.operation.useMu.Lock()
+	err := r.rows.Err()
+	r.operation.useMu.Unlock()
+	return errors.Join(err, r.operation.error())
+}
+
+func (r *snapshotRows) Next() bool {
+	r.operation.useMu.Lock()
+	defer r.operation.useMu.Unlock()
+	if r.closed || r.operation.isDone() {
+		return false
+	}
+	if r.rows.Next() {
+		return true
+	}
+	r.closeLocked()
+	return false
+}
+
+func (r *snapshotRows) Scan(destinations ...any) error {
+	r.operation.useMu.Lock()
+	defer r.operation.useMu.Unlock()
+	if r.closed || r.operation.isDone() {
+		return errors.Join(r.operation.ctx.Err(), r.operation.error())
+	}
+	if err := r.rows.Scan(destinations...); err != nil {
+		r.closeLocked()
+		return err
+	}
+	return nil
+}
+
+func (r *snapshotRows) closeLocked() {
+	if r.closed {
+		return
+	}
+	r.rows.Close()
+	r.operation.clearRows()
+	r.closed = true
+}
+
+type snapshotRow struct {
+	row       pgx.Row
+	operation *readOperation
+}
+
+func (r *snapshotRow) Scan(destinations ...any) error {
+	r.operation.useMu.Lock()
+	defer r.operation.useMu.Unlock()
+	if r.operation.isDone() {
+		return errors.Join(r.operation.ctx.Err(), r.operation.error())
+	}
+	return r.row.Scan(destinations...)
 }
 
 func (r *readRow) Scan(destinations ...any) error {

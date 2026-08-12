@@ -26,6 +26,9 @@ func TestTaskRuntimeRepositoryContract(t *testing.T) {
 		Migrations: taskruntimemigrations.Migrations(),
 		Cases: []postgrestest.RepositoryCase{
 			{Name: "atomic insert commit and read", Run: testTaskRuntimeRepositoryCommit},
+			{Name: "Task list filter and order", Run: testTaskRuntimeRepositoryList},
+			{Name: "Get uses one snapshot during Claim", Run: testTaskQueryGetSnapshotDuringClaim},
+			{Name: "List uses one snapshot during Cancel", Run: testTaskQueryListSnapshotDuringCancel},
 			{Name: "transaction rollback", Run: testTaskRuntimeRepositoryRollback},
 			{Name: "conditional updates and locks", Run: testTaskRuntimeRepositoryConditionalUpdates},
 			{Name: "current version update guards", Run: testTaskRuntimeRepositoryCurrentVersionGuards},
@@ -38,6 +41,196 @@ func TestTaskRuntimeRepositoryContract(t *testing.T) {
 			{Name: "TaskLog append", Run: testTaskRuntimeRepositoryTaskLogAppend},
 		},
 	})
+}
+
+func testTaskQueryGetSnapshotDuringClaim(t *testing.T, environment *postgrestest.RepositoryEnvironment) {
+	repositories := postgrestaskruntime.New(environment.Runtime.ReadPool())
+	now := repositoryDatabaseNow(t, environment, repositories.Clock)
+	graph := repositoryGraph("query-claim", now, now)
+	insertRepositoryGraph(t, environment, repositories, graph)
+
+	barrier := newQuerySnapshotBarrier()
+	t.Cleanup(barrier.release)
+	service := newRepositoryTaskQueryService(t, environment, barrier)
+	result := make(chan taskViewQueryResult, 1)
+	go func() {
+		view, err := service.GetTask(context.Background(), graph.task.TaskID)
+		result <- taskViewQueryResult{view: view, err: err}
+	}()
+	barrier.awaitEntered(t)
+
+	workerID := contracts.WorkerID("worker-query-claim")
+	if err := environment.Runtime.WriteExecutor().Execute(context.Background(), func(ctx context.Context, tx contracts.RuntimeWriteTx) error {
+		taskUpdated, err := repositories.Tasks.Update(ctx, tx, domain.TaskUpdate{
+			TaskID: graph.task.TaskID, ExpectedStatus: contracts.TaskStatusPending,
+			ExpectedCurrentExecutionVersion: 1, Status: contracts.TaskStatusRunning,
+			CurrentExecutionVersion: 1, StartedAt: &now,
+		})
+		if err != nil || !taskUpdated {
+			return fmt.Errorf("claim Task update = %v, %w", taskUpdated, err)
+		}
+		runUpdated, err := repositories.Runs.Update(ctx, tx, domain.RunUpdate{
+			TaskID: graph.task.TaskID, RunID: graph.run.RunID, ExecutionVersion: 1,
+			ExpectedStatus: contracts.RunStatusPending, Status: contracts.RunStatusRunning,
+			Context: json.RawMessage(`{}`), StartedAt: &now,
+		})
+		if err != nil || !runUpdated {
+			return fmt.Errorf("claim Run update = %v, %w", runUpdated, err)
+		}
+		executionUpdated, err := repositories.Executions.Update(ctx, tx, domain.TaskExecutionUpdate{
+			TaskID: graph.task.TaskID, ExecutionVersion: 1,
+			ExpectedStatus: contracts.TaskExecutionStatusQueued,
+			Status:         contracts.TaskExecutionStatusRunning, WorkerID: &workerID, StartedAt: &now,
+		})
+		if err != nil || !executionUpdated {
+			return fmt.Errorf("claim Execution update = %v, %w", executionUpdated, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("commit synchronized Claim transition: %v", err)
+	}
+	barrier.release()
+
+	before := awaitTaskQueryResult(t, result)
+	if before.err != nil {
+		t.Fatalf("GetTask during Claim: %v", before.err)
+	}
+	if before.view.Task.Status != contracts.TaskStatusPending ||
+		before.view.Run.Status != contracts.RunStatusPending ||
+		before.view.Execution.Status != contracts.TaskExecutionStatusQueued ||
+		before.view.Task.QueuedAt == nil || before.view.Execution.WorkerID != nil {
+		t.Fatalf("GetTask mixed pre/post Claim facts: %+v", before.view)
+	}
+	if observed := barrier.awaitObservedStatus(t); observed != contracts.TaskStatusPending {
+		t.Fatalf("evidence snapshot Task status = %s, want pre-Claim Pending", observed)
+	}
+
+	afterService := newRepositoryTaskQueryService(t, environment, databaseNowSnapshotEvidence{})
+	after, err := afterService.GetTask(context.Background(), graph.task.TaskID)
+	if err != nil {
+		t.Fatalf("GetTask after Claim: %v", err)
+	}
+	if after.Task.Status != contracts.TaskStatusRunning || after.Run.Status != contracts.RunStatusRunning ||
+		after.Execution.Status != contracts.TaskExecutionStatusRunning || after.Task.QueuedAt != nil ||
+		after.Execution.WorkerID == nil || *after.Execution.WorkerID != workerID {
+		t.Fatalf("GetTask post-Claim facts = %+v", after)
+	}
+}
+
+func testTaskQueryListSnapshotDuringCancel(t *testing.T, environment *postgrestest.RepositoryEnvironment) {
+	repositories := postgrestaskruntime.New(environment.Runtime.ReadPool())
+	now := repositoryDatabaseNow(t, environment, repositories.Clock)
+	graph := repositoryGraph("query-cancel", now, now)
+	workerID := contracts.WorkerID("worker-query-cancel")
+	graph.task.Status = contracts.TaskStatusRunning
+	graph.task.QueuedAt = nil
+	graph.task.StartedAt = &now
+	graph.run.Status = contracts.RunStatusRunning
+	graph.run.StartedAt = &now
+	graph.execution.Status = contracts.TaskExecutionStatusRunning
+	graph.execution.WorkerID = &workerID
+	graph.execution.StartedAt = &now
+	insertRepositoryGraph(t, environment, repositories, graph)
+
+	barrier := newQuerySnapshotBarrier()
+	t.Cleanup(barrier.release)
+	service := newRepositoryTaskQueryService(t, environment, barrier)
+	result := make(chan taskViewListResult, 1)
+	go func() {
+		views, err := service.ListTasks(context.Background(), nil)
+		result <- taskViewListResult{views: views, err: err}
+	}()
+	barrier.awaitEntered(t)
+
+	endedAt := now.Add(time.Second)
+	errorCode := contracts.ErrorCodeTaskCancelled
+	reason := contracts.TerminationReasonCancelled
+	if err := environment.Runtime.WriteExecutor().Execute(context.Background(), func(ctx context.Context, tx contracts.RuntimeWriteTx) error {
+		taskUpdated, err := repositories.Tasks.Update(ctx, tx, domain.TaskUpdate{
+			TaskID: graph.task.TaskID, ExpectedStatus: contracts.TaskStatusRunning,
+			ExpectedCurrentExecutionVersion: 1, Status: contracts.TaskStatusCancelled,
+			CurrentExecutionVersion: 1, ErrorCode: &errorCode, StartedAt: &now, EndedAt: &endedAt,
+		})
+		if err != nil || !taskUpdated {
+			return fmt.Errorf("cancel Task update = %v, %w", taskUpdated, err)
+		}
+		runUpdated, err := repositories.Runs.Update(ctx, tx, domain.RunUpdate{
+			TaskID: graph.task.TaskID, RunID: graph.run.RunID, ExecutionVersion: 1,
+			ExpectedStatus: contracts.RunStatusRunning, Status: contracts.RunStatusFailed,
+			Context: json.RawMessage(`{}`), ErrorCode: &errorCode, StartedAt: &now, EndedAt: &endedAt,
+		})
+		if err != nil || !runUpdated {
+			return fmt.Errorf("cancel Run update = %v, %w", runUpdated, err)
+		}
+		executionUpdated, err := repositories.Executions.Update(ctx, tx, domain.TaskExecutionUpdate{
+			TaskID: graph.task.TaskID, ExecutionVersion: 1,
+			ExpectedStatus: contracts.TaskExecutionStatusRunning, ExpectedWorkerID: &workerID,
+			Status: contracts.TaskExecutionStatusFailed, WorkerID: &workerID, ErrorCode: &errorCode,
+			TerminationReason: &reason, StartedAt: &now, EndedAt: &endedAt,
+		})
+		if err != nil || !executionUpdated {
+			return fmt.Errorf("cancel Execution update = %v, %w", executionUpdated, err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("commit synchronized Cancel transition: %v", err)
+	}
+	barrier.release()
+
+	before := awaitTaskListResult(t, result)
+	if before.err != nil || len(before.views) != 1 {
+		t.Fatalf("ListTasks during Cancel = %+v, %v", before.views, before.err)
+	}
+	view := before.views[0]
+	if view.Task.Status != contracts.TaskStatusRunning || view.Run.Status != contracts.RunStatusRunning ||
+		view.Execution.Status != contracts.TaskExecutionStatusRunning || view.Task.EndedAt != nil ||
+		view.Execution.WorkerID == nil || *view.Execution.WorkerID != workerID {
+		t.Fatalf("ListTasks mixed pre/post Cancel facts: %+v", view)
+	}
+	if observed := barrier.awaitObservedStatus(t); observed != contracts.TaskStatusRunning {
+		t.Fatalf("evidence snapshot Task status = %s, want pre-Cancel Running", observed)
+	}
+
+	afterService := newRepositoryTaskQueryService(t, environment, databaseNowSnapshotEvidence{})
+	after, err := afterService.ListTasks(context.Background(), nil)
+	if err != nil || len(after) != 1 {
+		t.Fatalf("ListTasks after Cancel = %+v, %v", after, err)
+	}
+	view = after[0]
+	if view.Task.Status != contracts.TaskStatusCancelled || view.Run.Status != contracts.RunStatusFailed ||
+		view.Execution.Status != contracts.TaskExecutionStatusFailed || view.Task.EndedAt == nil ||
+		view.Execution.TerminationReason == nil || *view.Execution.TerminationReason != reason ||
+		view.Execution.WorkerID == nil || *view.Execution.WorkerID != workerID {
+		t.Fatalf("ListTasks post-Cancel facts = %+v", view)
+	}
+}
+
+func testTaskRuntimeRepositoryList(t *testing.T, environment *postgrestest.RepositoryEnvironment) {
+	repositories := postgrestaskruntime.New(environment.Runtime.ReadPool())
+	now := repositoryDatabaseNow(t, environment, repositories.Clock)
+	older := repositoryGraph("list-older", now.Add(-time.Second), now.Add(-time.Second))
+	newer := repositoryGraph("list-newer", now, now)
+	insertRepositoryGraph(t, environment, repositories, older)
+	insertRepositoryGraph(t, environment, repositories, newer)
+
+	tasks, err := repositories.Tasks.List(context.Background(), nil)
+	if err != nil {
+		t.Fatalf("list all Tasks: %v", err)
+	}
+	if len(tasks) != 2 || tasks[0].TaskID != newer.task.TaskID || tasks[1].TaskID != older.task.TaskID {
+		t.Fatalf("listed Tasks = %+v, want newest first", tasks)
+	}
+
+	pending := contracts.TaskStatusPending
+	tasks, err = repositories.Tasks.List(context.Background(), &pending)
+	if err != nil || len(tasks) != 2 {
+		t.Fatalf("list Pending Tasks = %+v, %v", tasks, err)
+	}
+	failed := contracts.TaskStatusFailed
+	tasks, err = repositories.Tasks.List(context.Background(), &failed)
+	if err != nil || len(tasks) != 0 {
+		t.Fatalf("list Failed Tasks = %+v, %v", tasks, err)
+	}
 }
 
 func testTaskRuntimeRepositoryCommit(t *testing.T, environment *postgrestest.RepositoryEnvironment) {
@@ -1208,6 +1401,151 @@ func repositoryDatabaseNow(
 		t.Fatalf("read Repository database clock: %v", err)
 	}
 	return now
+}
+
+type taskViewQueryResult struct {
+	view domain.TaskView
+	err  error
+}
+
+type taskViewListResult struct {
+	views []domain.TaskView
+	err   error
+}
+
+type querySnapshotBarrier struct {
+	entered  chan struct{}
+	releaseC chan struct{}
+	observed chan contracts.TaskStatus
+}
+
+func newQuerySnapshotBarrier() *querySnapshotBarrier {
+	return &querySnapshotBarrier{
+		entered:  make(chan struct{}, 1),
+		releaseC: make(chan struct{}, 1),
+		observed: make(chan contracts.TaskStatus, 1),
+	}
+}
+
+func (b *querySnapshotBarrier) LoadSnapshotEvidence(
+	ctx context.Context,
+	snapshot postgresruntime.ReadSnapshot,
+	taskID contracts.TaskID,
+	_ contracts.RunID,
+	_ contracts.ExecutionVersion,
+) (domain.RecoverabilityEvidence, error) {
+	select {
+	case b.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return domain.RecoverabilityEvidence{}, ctx.Err()
+	case <-b.releaseC:
+	}
+
+	var (
+		statusText  string
+		databaseNow time.Time
+	)
+	if err := snapshot.QueryRow(
+		"SELECT status, clock_timestamp() FROM task WHERE task_id = $1",
+		taskID,
+	).Scan(&statusText, &databaseNow); err != nil {
+		return domain.RecoverabilityEvidence{}, err
+	}
+	status := contracts.TaskStatus(statusText)
+	b.observed <- status
+	return domain.RecoverabilityEvidence{DatabaseNow: databaseNow.UTC()}, nil
+}
+
+func (b *querySnapshotBarrier) awaitEntered(t *testing.T) {
+	t.Helper()
+	select {
+	case <-b.entered:
+	case <-time.After(5 * time.Second):
+		b.release()
+		t.Fatal("Task query did not reach synchronized evidence barrier")
+	}
+}
+
+func (b *querySnapshotBarrier) awaitObservedStatus(t *testing.T) contracts.TaskStatus {
+	t.Helper()
+	select {
+	case status := <-b.observed:
+		return status
+	case <-time.After(5 * time.Second):
+		t.Fatal("Task query evidence did not report its snapshot status")
+		return ""
+	}
+}
+
+func (b *querySnapshotBarrier) release() {
+	select {
+	case b.releaseC <- struct{}{}:
+	default:
+	}
+}
+
+type databaseNowSnapshotEvidence struct{}
+
+func (databaseNowSnapshotEvidence) LoadSnapshotEvidence(
+	_ context.Context,
+	snapshot postgresruntime.ReadSnapshot,
+	_ contracts.TaskID,
+	_ contracts.RunID,
+	_ contracts.ExecutionVersion,
+) (domain.RecoverabilityEvidence, error) {
+	var databaseNow time.Time
+	if err := snapshot.QueryRow("SELECT clock_timestamp()").Scan(&databaseNow); err != nil {
+		return domain.RecoverabilityEvidence{}, err
+	}
+	return domain.RecoverabilityEvidence{DatabaseNow: databaseNow.UTC()}, nil
+}
+
+type emptyTaskQueryConfigSource struct{}
+
+func (emptyTaskQueryConfigSource) LookupAgent(contracts.AgentID) (domain.AgentRuntimeConfig, bool) {
+	return domain.AgentRuntimeConfig{}, false
+}
+
+func newRepositoryTaskQueryService(
+	t *testing.T,
+	environment *postgrestest.RepositoryEnvironment,
+	evidence postgrestaskruntime.SnapshotEvidenceProjection,
+) *domain.TaskQueryService {
+	t.Helper()
+	snapshots, err := postgrestaskruntime.NewTaskQuerySnapshotRepository(environment.Runtime.ReadPool(), evidence)
+	if err != nil {
+		t.Fatalf("create Task query snapshot repository: %v", err)
+	}
+	service, err := domain.NewTaskQueryService(snapshots, emptyTaskQueryConfigSource{})
+	if err != nil {
+		t.Fatalf("create Task query service: %v", err)
+	}
+	return service
+}
+
+func awaitTaskQueryResult(t *testing.T, result <-chan taskViewQueryResult) taskViewQueryResult {
+	t.Helper()
+	select {
+	case received := <-result:
+		return received
+	case <-time.After(5 * time.Second):
+		t.Fatal("GetTask did not complete after releasing synchronized barrier")
+		return taskViewQueryResult{}
+	}
+}
+
+func awaitTaskListResult(t *testing.T, result <-chan taskViewListResult) taskViewListResult {
+	t.Helper()
+	select {
+	case received := <-result:
+		return received
+	case <-time.After(5 * time.Second):
+		t.Fatal("ListTasks did not complete after releasing synchronized barrier")
+		return taskViewListResult{}
+	}
 }
 
 type foreignRuntimeWriteTx struct{}
