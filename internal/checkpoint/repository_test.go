@@ -41,6 +41,27 @@ func TestRuntimeCheckpointPortFixesPurposeAndUsage(t *testing.T) {
 	}
 }
 
+func TestGeneratePlanClaimContinuationRequiresUnstartedRecoveryState(t *testing.T) {
+	t.Parallel()
+	facts := initializationValidationFacts()
+	facts.Task.CurrentExecutionVersion = 2
+	facts.Execution.ExecutionVersion = 2
+	runtimeContext := contracts.RuntimeContextV1{
+		SchemaVersion: 1, TaskID: facts.Task.TaskID, RunID: facts.Run.RunID,
+		ExecutionVersion: 2, NextAction: contracts.CheckpointNextActionGeneratePlan,
+		ResolvedReferences: contracts.CanonicalResolvedReferences{},
+	}
+	if reason := validateUsage(runtimeContext, facts, usageClaimContinuation); reason != "" {
+		t.Fatalf("Pending/Pending/QUEUED Recovery Start reason = %s", reason)
+	}
+
+	facts.Task.Status = contracts.TaskStatusRunning
+	facts.Run.Status = contracts.RunStatusRunning
+	if reason := validateUsage(runtimeContext, facts, usageClaimContinuation); reason != contracts.ReasonCodeCheckpointNextActionInvalid {
+		t.Fatalf("Running/Running/QUEUED GENERATE_PLAN reason = %s", reason)
+	}
+}
+
 func TestRuntimeCheckpointValidatesPlanStepActionAndReferences(t *testing.T) {
 	t.Parallel()
 	key := "payload"

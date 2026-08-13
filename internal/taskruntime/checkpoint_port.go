@@ -29,14 +29,13 @@ const (
 	ClaimCheckpointSourceContinuation ClaimCheckpointSource = "QueuedContinuation"
 )
 
-// SaveRuntimeCheckpointRequest 是 Task Runtime 在调用方事务内保存执行边界的最小请求。
+// SaveRuntimeCheckpointRequest 是 Task Runtime 在调用方事务内保存固定类型 Checkpoint 的最小请求。
+// Checkpoint 类型由窄保存方法固定，调用方不能自行填写 purpose 或 next_action。
 type SaveRuntimeCheckpointRequest struct {
 	TaskID              contracts.TaskID
 	RunID               contracts.RunID
 	ExecutionVersion    contracts.ExecutionVersion
 	ExecutionConfigHash contracts.ExecutionConfigHash
-	NextAction          contracts.CheckpointNextAction
-	CreatedAt           time.Time
 }
 
 // RuntimeCheckpoint 是领取与执行派发门禁使用的已验证 Checkpoint 投影。
@@ -105,7 +104,8 @@ func (ClaimCheckpointInvalid) isClaimCheckpointResult() {}
 
 // RuntimeCheckpointPort 在 Task Runtime 所有的事务内保存和校验 Checkpoint。
 type RuntimeCheckpointPort interface {
-	SaveRuntimeCheckpoint(context.Context, contracts.RuntimeWriteTx, SaveRuntimeCheckpointRequest) error
+	SaveInitializationCheckpoint(context.Context, contracts.RuntimeWriteTx, SaveRuntimeCheckpointRequest) error
+	SaveGeneratePlanExecutionCheckpoint(context.Context, contracts.RuntimeWriteTx, SaveRuntimeCheckpointRequest) error
 	LoadLatestForClaim(
 		context.Context,
 		contracts.RuntimeWriteTx,

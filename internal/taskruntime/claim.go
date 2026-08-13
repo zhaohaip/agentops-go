@@ -159,12 +159,12 @@ func (s *ClaimTaskService) ClaimNextExecution(
 		if err := s.commitClaim(ctx, tx, facts, now, workerID); err != nil {
 			return err
 		}
-		if facts.run.PlanID == nil {
-			if err := s.checkpoints.SaveRuntimeCheckpoint(ctx, tx, SaveRuntimeCheckpointRequest{
+		if facts.run.PlanID == nil &&
+			(source == ClaimCheckpointSourceInitial || checkpoint.SourceExecutionVersion != nil) {
+			if err := s.checkpoints.SaveGeneratePlanExecutionCheckpoint(ctx, tx, SaveRuntimeCheckpointRequest{
 				TaskID: facts.task.TaskID, RunID: facts.run.RunID,
 				ExecutionVersion:    facts.execution.ExecutionVersion,
 				ExecutionConfigHash: facts.execution.ExecutionConfigHash,
-				NextAction:          contracts.CheckpointNextActionGeneratePlan, CreatedAt: now,
 			}); err != nil {
 				return fmt.Errorf("save Claim GENERATE_PLAN Checkpoint: %w", err)
 			}
@@ -462,7 +462,9 @@ func classifyClaimSource(facts claimFacts) (ClaimCheckpointSource, contracts.Inv
 	if facts.run.CurrentStepID != nil && facts.run.PlanID == nil {
 		return "", contracts.InvariantCodeCrossObjectStateInvalid
 	}
-	if facts.execution.ExecutionVersion == 1 && facts.run.PlanID == nil && facts.run.CurrentStepID == nil {
+	if facts.execution.ExecutionVersion == 1 && facts.execution.StartedAt == nil &&
+		facts.task.StartedAt == nil && facts.run.StartedAt == nil &&
+		facts.run.PlanID == nil && facts.run.CurrentStepID == nil {
 		return ClaimCheckpointSourceInitial, ""
 	}
 	if facts.run.PlanID != nil && facts.run.CurrentStepID == nil {

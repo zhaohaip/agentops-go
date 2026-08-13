@@ -169,9 +169,8 @@ func (s *CreateTaskService) CreateTask(ctx context.Context, request CreateTaskRe
 		}); insertErr != nil {
 			return fmt.Errorf("insert Create TaskExecution: %w", insertErr)
 		}
-		if checkpointErr := s.checkpoints.SaveRuntimeCheckpoint(ctx, tx, SaveRuntimeCheckpointRequest{
+		if checkpointErr := s.checkpoints.SaveInitializationCheckpoint(ctx, tx, SaveRuntimeCheckpointRequest{
 			TaskID: taskID, RunID: runID, ExecutionVersion: version, ExecutionConfigHash: configHash,
-			NextAction: contracts.CheckpointNextActionGeneratePlan, CreatedAt: now,
 		}); checkpointErr != nil {
 			return fmt.Errorf("save Create initialization Checkpoint: %w", checkpointErr)
 		}

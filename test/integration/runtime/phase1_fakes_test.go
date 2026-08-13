@@ -514,7 +514,15 @@ func (p *phase1Checkpoints) record(token contracts.RuntimeWriteTx) error {
 	return nil
 }
 
-func (p *phase1Checkpoints) SaveRuntimeCheckpoint(_ context.Context, token contracts.RuntimeWriteTx, request domain.SaveRuntimeCheckpointRequest) error {
+func (p *phase1Checkpoints) SaveInitializationCheckpoint(_ context.Context, token contracts.RuntimeWriteTx, request domain.SaveRuntimeCheckpointRequest) error {
+	return p.save(token, request)
+}
+
+func (p *phase1Checkpoints) SaveGeneratePlanExecutionCheckpoint(_ context.Context, token contracts.RuntimeWriteTx, request domain.SaveRuntimeCheckpointRequest) error {
+	return p.save(token, request)
+}
+
+func (p *phase1Checkpoints) save(token contracts.RuntimeWriteTx, request domain.SaveRuntimeCheckpointRequest) error {
 	store, err := strictStore(token)
 	if err != nil {
 		return err
@@ -531,7 +539,7 @@ func (p *phase1Checkpoints) SaveRuntimeCheckpoint(_ context.Context, token contr
 	store.checkpoints = append(store.checkpoints, domain.RuntimeCheckpoint{
 		CheckpointID: contracts.CheckpointID(fmt.Sprintf("checkpoint-%s-%d", request.TaskID, sequence)),
 		TaskID:       request.TaskID, RunID: request.RunID, ExecutionVersion: request.ExecutionVersion,
-		ExecutionConfigHash: request.ExecutionConfigHash, NextAction: request.NextAction,
+		ExecutionConfigHash: request.ExecutionConfigHash, NextAction: contracts.CheckpointNextActionGeneratePlan,
 		CheckpointSequence: sequence,
 	})
 	return nil

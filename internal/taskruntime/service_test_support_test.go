@@ -598,8 +598,23 @@ func (p *fakeCheckpointPort) LoadLatestForStartupCleanup(
 	return taskruntime.StartupCleanupCheckpointInvalid{ReasonCode: contracts.ReasonCodeCheckpointNotFound}, nil
 }
 
-func (p *fakeCheckpointPort) SaveRuntimeCheckpoint(
+func (p *fakeCheckpointPort) SaveInitializationCheckpoint(
 	_ context.Context,
+	token contracts.RuntimeWriteTx,
+	request taskruntime.SaveRuntimeCheckpointRequest,
+) error {
+	return p.save(token, request)
+}
+
+func (p *fakeCheckpointPort) SaveGeneratePlanExecutionCheckpoint(
+	_ context.Context,
+	token contracts.RuntimeWriteTx,
+	request taskruntime.SaveRuntimeCheckpointRequest,
+) error {
+	return p.save(token, request)
+}
+
+func (p *fakeCheckpointPort) save(
 	token contracts.RuntimeWriteTx,
 	request taskruntime.SaveRuntimeCheckpointRequest,
 ) error {
@@ -622,7 +637,7 @@ func (p *fakeCheckpointPort) SaveRuntimeCheckpoint(
 	transaction.store.checkpoints = append(transaction.store.checkpoints, taskruntime.RuntimeCheckpoint{
 		CheckpointID: contracts.CheckpointID(fmt.Sprintf("checkpoint-%d", len(transaction.store.checkpoints)+1)),
 		TaskID:       request.TaskID, RunID: request.RunID, ExecutionVersion: request.ExecutionVersion,
-		ExecutionConfigHash: request.ExecutionConfigHash, NextAction: request.NextAction,
+		ExecutionConfigHash: request.ExecutionConfigHash, NextAction: contracts.CheckpointNextActionGeneratePlan,
 		CheckpointSequence: sequence,
 	})
 	return nil

@@ -1230,10 +1230,16 @@ type fakeExecutionCheckpoint struct {
 	invalidTx contracts.RuntimeWriteTx
 }
 
-func (p *fakeExecutionCheckpoint) SaveRuntimeCheckpoint(
+func (p *fakeExecutionCheckpoint) SaveInitializationCheckpoint(
 	context.Context, contracts.RuntimeWriteTx, taskruntime.SaveRuntimeCheckpointRequest,
 ) error {
-	return errors.New("SaveRuntimeCheckpoint is outside Execute test scope")
+	return errors.New("SaveInitializationCheckpoint is outside Execute test scope")
+}
+
+func (p *fakeExecutionCheckpoint) SaveGeneratePlanExecutionCheckpoint(
+	context.Context, contracts.RuntimeWriteTx, taskruntime.SaveRuntimeCheckpointRequest,
+) error {
+	return errors.New("SaveGeneratePlanExecutionCheckpoint is outside Execute test scope")
 }
 
 func (p *fakeExecutionCheckpoint) LoadLatestForClaim(

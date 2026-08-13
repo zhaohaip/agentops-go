@@ -277,8 +277,21 @@ func (m *Manager) loadAndValidateLatest(ctx context.Context, tx contracts.Runtim
 	if entity.ExecutionConfigHash != facts.Execution.ExecutionConfigHash {
 		return invalidResult(entity, contracts.ReasonCodeCheckpointExecutionHashMismatch), nil
 	}
-	if entity.SourceExecutionVersion != nil || entity.SourceCheckpointID != nil {
-		return invalidResult(entity, contracts.ReasonCodeCheckpointSourceInvalid), nil
+	inferredType, ok := inferCheckpointType(entity, decoded)
+	if !ok {
+		return invalidResult(entity, contracts.ReasonCodeCheckpointTypeAmbiguous), nil
+	}
+	if inferredType == InferredTypeRecoveryStart {
+		if usage != usageClaimContinuation {
+			return invalidResult(entity, contracts.ReasonCodeCheckpointSourceInvalid), nil
+		}
+		valid, err := m.directRecoverySourceValid(ctx, tx, entity)
+		if err != nil {
+			return nil, fmt.Errorf("load latest Checkpoint: validate Recovery source: %w", err)
+		}
+		if !valid {
+			return invalidResult(entity, contracts.ReasonCodeCheckpointSourceInvalid), nil
+		}
 	}
 	reason, invariant := m.validateContext(decoded, facts, usage)
 	if invariant {
@@ -286,10 +299,6 @@ func (m *Manager) loadAndValidateLatest(ctx context.Context, tx contracts.Runtim
 	}
 	if reason != "" {
 		return invalidResult(entity, reason), nil
-	}
-	inferredType, ok := inferCheckpointType(entity, decoded)
-	if !ok {
-		return invalidResult(entity, contracts.ReasonCodeCheckpointTypeAmbiguous), nil
 	}
 	if usage == usageClaimInitial && inferredType != InferredTypeInitialization ||
 		usage == usageClaimContinuation && inferredType == InferredTypeInitialization {
@@ -299,6 +308,38 @@ func (m *Manager) loadAndValidateLatest(ctx context.Context, tx contracts.Runtim
 		Checkpoint: View{Entity: entity, Context: decoded}, InferredType: inferredType,
 		ExecutionConfigHash: entity.ExecutionConfigHash,
 	}, nil
+}
+
+// directRecoverySourceValid 只核对 Recovery Start 的直接不可变来源，不沿来源链递归。
+func (m *Manager) directRecoverySourceValid(ctx context.Context, tx contracts.RuntimeWriteTx, entity Entity) (bool, error) {
+	if entity.SourceExecutionVersion == nil || entity.SourceCheckpointID == nil ||
+		*entity.SourceExecutionVersion+1 != entity.ExecutionVersion {
+		return false, nil
+	}
+	source, err := m.repository.FindByID(ctx, tx, *entity.SourceCheckpointID)
+	if errors.Is(err, ErrRepositoryNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if source.CheckpointID != *entity.SourceCheckpointID ||
+		source.TaskID != entity.TaskID || source.RunID != entity.RunID ||
+		source.ExecutionVersion != *entity.SourceExecutionVersion ||
+		source.CheckpointSequence >= entity.CheckpointSequence ||
+		source.ExecutionConfigHash != entity.ExecutionConfigHash {
+		return false, nil
+	}
+	sourceExecution, err := m.repository.LoadTaskExecution(ctx, tx, entity.TaskID, *entity.SourceExecutionVersion)
+	if errors.Is(err, ErrPersistenceInvariantViolation) || errors.Is(err, ErrRepositoryNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return sourceExecution.TaskID == entity.TaskID &&
+		sourceExecution.ExecutionVersion == *entity.SourceExecutionVersion &&
+		sourceExecution.ExecutionConfigHash == source.ExecutionConfigHash, nil
 }
 
 func (m *Manager) loadFacts(ctx context.Context, tx contracts.RuntimeWriteTx, query RuntimeCheckpointQuery, runtimeContext contracts.RuntimeContextV1) (ValidationFacts, error) {
