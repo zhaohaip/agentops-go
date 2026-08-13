@@ -14,6 +14,38 @@ import (
 
 var outputFieldNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
+// RuntimeContextCodecErrorKind 是 Runtime Context 解码失败的可判定类别。
+type RuntimeContextCodecErrorKind uint8
+
+const (
+	// RuntimeContextCodecMalformed 表示 JSON 或固定结构无效。
+	RuntimeContextCodecMalformed RuntimeContextCodecErrorKind = iota + 1
+	// RuntimeContextCodecVersionUnsupported 表示 schema_version 不是当前冻结版本。
+	RuntimeContextCodecVersionUnsupported
+)
+
+// RuntimeContextCodecError 保留安全错误类别，不向调用方暴露原始持久化内容。
+type RuntimeContextCodecError struct {
+	Kind RuntimeContextCodecErrorKind
+	Err  error
+}
+
+// Error 实现 error。
+func (e *RuntimeContextCodecError) Error() string {
+	if e == nil || e.Err == nil {
+		return "runtime context codec error"
+	}
+	return e.Err.Error()
+}
+
+// Unwrap 返回底层安全诊断错误。
+func (e *RuntimeContextCodecError) Unwrap() error {
+	if e == nil {
+		return nil
+	}
+	return e.Err
+}
+
 const (
 	runtimeContextSchemaVersion = 1
 	maxResolvedReferences       = 256
@@ -47,15 +79,21 @@ func NewRuntimeContextCodec(limits RuntimeContextCodecLimits) (RuntimeContextCod
 // field set. Arbitrary maps are confined to already-frozen JSON values.
 func (c RuntimeContextCodec) Encode(value contracts.RuntimeContextV1) ([]byte, error) {
 	if err := validateRuntimeContext(value); err != nil {
-		return nil, fmt.Errorf("encode runtime context: %w", err)
+		if value.SchemaVersion != runtimeContextSchemaVersion {
+			return nil, &RuntimeContextCodecError{
+				Kind: RuntimeContextCodecVersionUnsupported,
+				Err:  fmt.Errorf("encode runtime context: %w", err),
+			}
+		}
+		return nil, malformedCodecError("encode runtime context", err)
 	}
 
 	encoded, err := json.Marshal(value)
 	if err != nil {
-		return nil, fmt.Errorf("encode runtime context: %w", err)
+		return nil, malformedCodecError("encode runtime context", err)
 	}
 	if err := c.validateJSONDocument(encoded); err != nil {
-		return nil, fmt.Errorf("encode runtime context: %w", err)
+		return nil, malformedCodecError("encode runtime context", err)
 	}
 	return encoded, nil
 }
@@ -63,25 +101,38 @@ func (c RuntimeContextCodec) Encode(value contracts.RuntimeContextV1) ([]byte, e
 // Decode strictly parses and validates one RuntimeContextV1 JSON object.
 func (c RuntimeContextCodec) Decode(encoded []byte) (contracts.RuntimeContextV1, error) {
 	if err := c.validateJSONDocument(encoded); err != nil {
-		return contracts.RuntimeContextV1{}, fmt.Errorf("decode runtime context: %w", err)
+		return contracts.RuntimeContextV1{}, malformedCodecError("decode runtime context", err)
 	}
 	if err := rejectNullRuntimeContextFields(encoded); err != nil {
-		return contracts.RuntimeContextV1{}, fmt.Errorf("decode runtime context: %w", err)
+		return contracts.RuntimeContextV1{}, malformedCodecError("decode runtime context", err)
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(encoded))
 	decoder.DisallowUnknownFields()
 	var value contracts.RuntimeContextV1
 	if err := decoder.Decode(&value); err != nil {
-		return contracts.RuntimeContextV1{}, fmt.Errorf("decode runtime context: %w", err)
+		return contracts.RuntimeContextV1{}, malformedCodecError("decode runtime context", err)
 	}
 	if err := ensureJSONEOF(decoder); err != nil {
-		return contracts.RuntimeContextV1{}, fmt.Errorf("decode runtime context: %w", err)
+		return contracts.RuntimeContextV1{}, malformedCodecError("decode runtime context", err)
 	}
 	if err := validateRuntimeContext(value); err != nil {
-		return contracts.RuntimeContextV1{}, fmt.Errorf("decode runtime context: %w", err)
+		if value.SchemaVersion != 0 && value.SchemaVersion != runtimeContextSchemaVersion {
+			return contracts.RuntimeContextV1{}, &RuntimeContextCodecError{
+				Kind: RuntimeContextCodecVersionUnsupported,
+				Err:  fmt.Errorf("decode runtime context: %w", err),
+			}
+		}
+		return contracts.RuntimeContextV1{}, malformedCodecError("decode runtime context", err)
 	}
 	return value, nil
+}
+
+func malformedCodecError(operation string, err error) error {
+	return &RuntimeContextCodecError{
+		Kind: RuntimeContextCodecMalformed,
+		Err:  fmt.Errorf("%s: %w", operation, err),
+	}
 }
 
 func (c RuntimeContextCodec) validateJSONDocument(encoded []byte) error {
@@ -269,8 +320,8 @@ func validateNextActionShape(value contracts.RuntimeContextV1) error {
 			return errors.New("EXECUTE_APPROVED_TOOL requires plan, current step, and approval context")
 		}
 	case contracts.CheckpointNextActionFinalizeRun:
-		if !hasPlan || hasStep || hasApproval || hasReferences {
-			return errors.New("FINALIZE_RUN requires plan without current step, approval, or resolved references")
+		if !hasPlan || !hasStep || hasApproval || hasReferences {
+			return errors.New("FINALIZE_RUN requires plan and final current step without approval or resolved references")
 		}
 	}
 	return nil

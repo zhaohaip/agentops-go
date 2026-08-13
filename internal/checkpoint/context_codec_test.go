@@ -177,7 +177,6 @@ func TestRuntimeContextCodecValidatesNextActionShape(t *testing.T) {
 
 	codec := mustRuntimeContextCodec(t, RuntimeContextCodecLimits{MaxBytes: 16 * 1024, MaxDepth: 16})
 	planID := contracts.PlanID("plan-1")
-	stepID := contracts.StepID("step-1")
 	approval := validApprovalContext()
 	tests := []struct {
 		name   string
@@ -189,7 +188,7 @@ func TestRuntimeContextCodecValidatesNextActionShape(t *testing.T) {
 		{name: "execute step has approval", mutate: func(value *contracts.RuntimeContextV1) { value.ApprovalContext = &approval }},
 		{name: "request approval missing plan", mutate: func(value *contracts.RuntimeContextV1) { value.PlanID = nil }},
 		{name: "execute approved tool missing approval", mutate: func(value *contracts.RuntimeContextV1) { value.ApprovalContext = nil }},
-		{name: "finalize run has step", mutate: func(value *contracts.RuntimeContextV1) { value.CurrentStepID = &stepID }},
+		{name: "finalize run missing step", mutate: func(value *contracts.RuntimeContextV1) { value.CurrentStepID = nil }},
 	}
 
 	for _, test := range tests {
@@ -290,7 +289,7 @@ func validRuntimeContext(action contracts.CheckpointNextAction) contracts.Runtim
 		value.PlanID = &planID
 	}
 	if action == contracts.CheckpointNextActionExecuteStep || action == contracts.CheckpointNextActionRequestApproval ||
-		action == contracts.CheckpointNextActionExecuteApprovedTool {
+		action == contracts.CheckpointNextActionExecuteApprovedTool || action == contracts.CheckpointNextActionFinalizeRun {
 		stepID := contracts.StepID("step-1")
 		value.CurrentStepID = &stepID
 	}

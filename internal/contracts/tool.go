@@ -1,6 +1,14 @@
 package contracts
 
-import "context"
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+)
 
 const (
 	// FrozenApprovedToolInputSchemaV1 是冻结审批输入的固定 schema。
@@ -96,6 +104,47 @@ type FrozenApprovedToolInputV1 struct {
 	ToolInput       FrozenToolInput `json:"tool_input"`
 	ObservedValues  ObservedValues  `json:"observed_values"`
 	ResourceVersion ResourceVersion `json:"resource_version"`
+}
+
+// ComputeFrozenInputHashV1 按冻结协议的唯一 V1 结构计算动作摘要。
+func ComputeFrozenInputHashV1(value FrozenApprovedToolInputV1) (FrozenInputHash, error) {
+	if value.Schema != FrozenApprovedToolInputSchemaV1 || value.Version != FrozenApprovedToolInputVersionV1 {
+		return "", fmt.Errorf("frozen approved tool input version is unsupported")
+	}
+	toolInput, err := decodeFrozenJSON(value.ToolInput)
+	if err != nil {
+		return "", fmt.Errorf("decode frozen tool input: %w", err)
+	}
+	observedValues, err := decodeFrozenJSON(value.ObservedValues)
+	if err != nil {
+		return "", fmt.Errorf("decode observed values: %w", err)
+	}
+	encoded, err := json.Marshal(struct {
+		Schema          string          `json:"schema"`
+		Version         uint32          `json:"version"`
+		ToolName        ToolName        `json:"tool_name"`
+		ToolInput       any             `json:"tool_input"`
+		ObservedValues  any             `json:"observed_values"`
+		ResourceVersion ResourceVersion `json:"resource_version"`
+	}{value.Schema, value.Version, value.ToolName, toolInput, observedValues, value.ResourceVersion})
+	if err != nil {
+		return "", fmt.Errorf("encode frozen approved tool input: %w", err)
+	}
+	digest := sha256.Sum256(encoded)
+	return FrozenInputHash(hex.EncodeToString(digest[:])), nil
+}
+
+func decodeFrozenJSON(value []byte) (any, error) {
+	decoder := json.NewDecoder(bytes.NewReader(value))
+	decoder.UseNumber()
+	var decoded any
+	if err := decoder.Decode(&decoded); err != nil {
+		return nil, err
+	}
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		return nil, fmt.Errorf("expected one JSON value")
+	}
+	return decoded, nil
 }
 
 // ApprovedAction 表示不可变 Approved Approval 的执行投影。

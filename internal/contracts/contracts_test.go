@@ -128,6 +128,10 @@ func TestFrozenApprovedToolInputV1FixedVector(t *testing.T) {
 	if got, want := hex.EncodeToString(sum[:]), "c33d13c983cc54ab1c906c40004b9c2a3ca2efba506ae8db4a12ddca1f4c70f4"; got != want {
 		t.Fatalf("hash = %s, want %s", got, want)
 	}
+	computed, err := ComputeFrozenInputHashV1(value)
+	if err != nil || computed != FrozenInputHash("c33d13c983cc54ab1c906c40004b9c2a3ca2efba506ae8db4a12ddca1f4c70f4") {
+		t.Fatalf("ComputeFrozenInputHashV1() = %s, %v", computed, err)
+	}
 }
 
 func TestExecutionConfigV1FixedVector(t *testing.T) {
