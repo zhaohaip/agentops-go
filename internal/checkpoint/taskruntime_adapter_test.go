@@ -108,4 +108,12 @@ func (p *recordingRuntimeCheckpointPort) LoadLatestForStartupCleanup(context.Con
 	return p.claimResult, nil
 }
 
+func (*recordingRuntimeCheckpointPort) ValidateRecoverySource(context.Context, contracts.RuntimeWriteTx, RecoverySourceQuery) (RecoverySourceResult, error) {
+	return RecoverySourceInvalid{}, nil
+}
+
+func (*recordingRuntimeCheckpointPort) CreateRecoveryStart(context.Context, contracts.RuntimeWriteTx, RuntimeRecoveryStartRequest) (Ref, error) {
+	return Ref{}, nil
+}
+
 var _ RuntimeCheckpointPort = (*recordingRuntimeCheckpointPort)(nil)

@@ -458,16 +458,12 @@ func validateStartupScene(
 		if approval.Status != contracts.ApprovalStatusApproved {
 			return contracts.ReasonCodeCheckpointApprovalReferenceInvalid, nil
 		}
-		if !validApprovalContext(
-			checkpoint.ApprovalContext, facts.Step.ToolName, facts.Execution.ExecutionVersion,
-		) {
+		if !validCheckpointApprovalContext(checkpoint, facts.Step.ToolName) {
 			return contracts.ReasonCodeCheckpointApprovalReferenceInvalid, nil
 		}
 		if checkpoint.ApprovalContext.ApprovalID != approval.ApprovalID ||
 			checkpoint.ApprovalContext.ApprovalExecutionVersion != approval.ApprovalExecutionVersion ||
-			checkpoint.ApprovalContext.ToolName != approval.ToolName || facts.Step.ToolName != approval.ToolName ||
-			checkpoint.SourceExecutionVersion == nil || *checkpoint.SourceExecutionVersion != approval.ApprovalExecutionVersion ||
-			checkpoint.SourceCheckpointID == nil || *checkpoint.SourceCheckpointID == "" {
+			checkpoint.ApprovalContext.ToolName != approval.ToolName || facts.Step.ToolName != approval.ToolName {
 			return contracts.ReasonCodeCheckpointApprovalReferenceInvalid, nil
 		}
 		if checkpoint.ApprovalContext.FrozenInputHash != approval.FrozenInputHash {

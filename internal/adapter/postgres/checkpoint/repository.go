@@ -95,18 +95,21 @@ func (*Repository) LoadValidationFacts(ctx context.Context, token contracts.Runt
 	var facts domain.ValidationFacts
 	err := withWriteTx(token, func(tx pgx.Tx) error {
 		if err := tx.QueryRow(ctx, `
-SELECT t.task_id, t.status, t.current_run_id, t.current_execution_version, t.queued_at,
+SELECT t.task_id, t.status, t.current_run_id, t.current_execution_version, t.queued_at, t.error_code,
        r.run_id, r.task_id, r.status, r.plan_id, r.current_step_id,
-       e.task_id, e.execution_version, e.status, e.worker_id, e.execution_config_hash
+       e.task_id, e.execution_version, e.status, e.worker_id, e.execution_config_hash,
+       e.observed_config_hash, e.error_code, e.started_at
 FROM task AS t
 JOIN run AS r ON r.task_id = t.task_id AND r.run_id = $2
 JOIN task_execution AS e ON e.task_id = t.task_id AND e.execution_version = $3
 WHERE t.task_id = $1`, request.TaskID, request.RunID, request.ExecutionVersion).Scan(
 			&facts.Task.TaskID, &facts.Task.Status, &facts.Task.CurrentRunID,
 			&facts.Task.CurrentExecutionVersion, &facts.Task.QueuedAt,
+			&facts.Task.ErrorCode,
 			&facts.Run.RunID, &facts.Run.TaskID, &facts.Run.Status, &facts.Run.PlanID, &facts.Run.CurrentStepID,
 			&facts.Execution.TaskID, &facts.Execution.ExecutionVersion, &facts.Execution.Status,
 			&facts.Execution.WorkerID, &facts.Execution.ExecutionConfigHash,
+			&facts.Execution.ObservedConfigHash, &facts.Execution.ErrorCode, &facts.Execution.StartedAt,
 		); err != nil {
 			return err
 		}

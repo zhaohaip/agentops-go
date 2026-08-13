@@ -75,6 +75,8 @@ type RuntimeCheckpointPort interface {
 	LoadLatestForClaim(context.Context, contracts.RuntimeWriteTx, RuntimeCheckpointQuery, ClaimQueryKind) (ValidationResult, error)
 	LoadLatestForExecutionDispatch(context.Context, contracts.RuntimeWriteTx, RuntimeCheckpointQuery) (ValidationResult, error)
 	LoadLatestForStartupCleanup(context.Context, contracts.RuntimeWriteTx, RuntimeCheckpointQuery) (ValidationResult, error)
+	ValidateRecoverySource(context.Context, contracts.RuntimeWriteTx, RecoverySourceQuery) (RecoverySourceResult, error)
+	CreateRecoveryStart(context.Context, contracts.RuntimeWriteTx, RuntimeRecoveryStartRequest) (Ref, error)
 }
 
 // ValidationResult 是最新记录的封闭验证结果。
@@ -282,7 +284,7 @@ func (m *Manager) loadAndValidateLatest(ctx context.Context, tx contracts.Runtim
 		return invalidResult(entity, contracts.ReasonCodeCheckpointTypeAmbiguous), nil
 	}
 	if inferredType == InferredTypeRecoveryStart {
-		if usage != usageClaimContinuation {
+		if usage == usageClaimInitial {
 			return invalidResult(entity, contracts.ReasonCodeCheckpointSourceInvalid), nil
 		}
 		valid, err := m.directRecoverySourceValid(ctx, tx, entity)
@@ -293,7 +295,12 @@ func (m *Manager) loadAndValidateLatest(ctx context.Context, tx contracts.Runtim
 			return invalidResult(entity, contracts.ReasonCodeCheckpointSourceInvalid), nil
 		}
 	}
-	reason, invariant := m.validateContext(decoded, facts, usage)
+	reason, invariant := m.validateContextWithApproval(
+		decoded,
+		facts,
+		usage,
+		inferredType == InferredTypeRecoveryStart,
+	)
 	if invariant {
 		return persistenceInvariantResult(), nil
 	}
@@ -354,13 +361,21 @@ func (m *Manager) loadFacts(ctx context.Context, tx contracts.RuntimeWriteTx, qu
 }
 
 func (m *Manager) validateContext(runtimeContext contracts.RuntimeContextV1, facts ValidationFacts, usage checkpointUsage) (contracts.ReasonCode, bool) {
+	return m.validateContextWithApproval(runtimeContext, facts, usage, false)
+}
+
+func (m *Manager) validateContextWithApproval(runtimeContext contracts.RuntimeContextV1, facts ValidationFacts, usage checkpointUsage, recovery bool) (contracts.ReasonCode, bool) {
 	if reason := validatePlanAndStep(runtimeContext, facts); reason != "" {
 		return reason, false
 	}
 	if reason := m.validateReferences(runtimeContext, facts); reason != "" {
 		return reason, false
 	}
-	if reason, invariant := validateApproval(runtimeContext, facts); reason != "" || invariant {
+	approvalValidator := validateApproval
+	if recovery {
+		approvalValidator = validateApprovalForRecovery
+	}
+	if reason, invariant := approvalValidator(runtimeContext, facts); reason != "" || invariant {
 		return reason, invariant
 	}
 	if reason := validateAction(runtimeContext, facts, usage); reason != "" {

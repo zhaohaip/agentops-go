@@ -335,6 +335,52 @@ func TestExecuteApprovedToolRejectsMalformedApprovalContext(t *testing.T) {
 	}
 }
 
+func TestExecuteApprovedRecoveryStartUsesCrossVersionApproval(t *testing.T) {
+	t.Parallel()
+	harness := newExecuteHarness(t, contracts.CheckpointNextActionExecuteApprovedTool)
+	sourceVersion := contracts.ExecutionVersion(1)
+	sourceCheckpointID := contracts.CheckpointID("checkpoint-v1")
+	harness.claim.ExecutionVersion = 2
+	harness.dispatch.mutate(func(state *executeState) {
+		state.facts.Task.CurrentExecutionVersion = 2
+		state.facts.Execution.ExecutionVersion = 2
+		state.checkpoint.ExecutionVersion = 2
+		state.checkpoint.SourceExecutionVersion = &sourceVersion
+		state.checkpoint.SourceCheckpointID = &sourceCheckpointID
+	})
+	harness.steps.outcomes = []taskruntime.StepOutcome{taskruntime.StepOutcomeStale{}}
+
+	result, err := harness.service.ExecuteClaimedExecution(context.Background(), harness.claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := result.(contracts.ExecuteResultStale); !ok || harness.steps.called.Load() != 1 {
+		t.Fatalf("result/calls = %T/%d, want Stale/1", result, harness.steps.called.Load())
+	}
+}
+
+func TestExecuteApprovedContinuationRequiresSameVersionWithoutRecoverySource(t *testing.T) {
+	t.Parallel()
+	harness := newExecuteHarness(t, contracts.CheckpointNextActionExecuteApprovedTool)
+	harness.claim.ExecutionVersion = 2
+	harness.dispatch.mutate(func(state *executeState) {
+		state.facts.Task.CurrentExecutionVersion = 2
+		state.facts.Execution.ExecutionVersion = 2
+		state.checkpoint.ExecutionVersion = 2
+	})
+
+	result, err := harness.service.ExecuteClaimedExecution(context.Background(), harness.claim)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := result.(contracts.ExecuteResultTerminal); !ok || harness.steps.called.Load() != 0 {
+		t.Fatalf("result/calls = %T/%d, want Terminal/0", result, harness.steps.called.Load())
+	}
+	if reason := harness.dispatch.snapshot().checkpointInvalidReason; reason != contracts.ReasonCodeCheckpointApprovalReferenceInvalid {
+		t.Fatalf("reason = %s", reason)
+	}
+}
+
 func TestExecuteRejectsOutcomeInconsistentWithFrozenAction(t *testing.T) {
 	t.Parallel()
 	tests := []struct {

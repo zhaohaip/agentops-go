@@ -77,6 +77,7 @@ type TaskFact struct {
 	CurrentRunID            contracts.RunID
 	CurrentExecutionVersion contracts.ExecutionVersion
 	QueuedAt                *time.Time
+	ErrorCode               *contracts.ErrorCode
 }
 
 // RunFact 是 Checkpoint 状态矩阵所需的最小 Run 投影。
@@ -95,6 +96,9 @@ type ExecutionFact struct {
 	Status              contracts.TaskExecutionStatus
 	WorkerID            *contracts.WorkerID
 	ExecutionConfigHash contracts.ExecutionConfigHash
+	ObservedConfigHash  *contracts.ExecutionConfigHash
+	ErrorCode           *contracts.ErrorCode
+	StartedAt           *time.Time
 }
 
 // PlanFact 是 Checkpoint 引用校验所需的最小 Plan 投影。

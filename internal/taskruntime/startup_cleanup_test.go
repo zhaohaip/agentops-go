@@ -566,6 +566,10 @@ func (h *startupCleanupHarness) withToolBoundary(approved bool) {
 	if approved {
 		h.makeToolWrite()
 		tool = h.config.ExecutionConfig.ToolFramework.Tools[0]
+		h.mutateFacts(func(f *taskruntime.StartupCleanupFacts) {
+			f.Task.CurrentExecutionVersion = 2
+			f.Execution.ExecutionVersion = 2
+		})
 	}
 	stepID := contracts.StepID("tool-step")
 	h.mutateFacts(func(f *taskruntime.StartupCleanupFacts) {

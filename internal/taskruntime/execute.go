@@ -677,7 +677,7 @@ func validateFrozenDispatch(
 			}
 			return "", nil
 		case contracts.CheckpointNextActionExecuteApprovedTool:
-			if !validApprovalContext(checkpoint.ApprovalContext, step.ToolName, facts.Execution.ExecutionVersion) {
+			if !validCheckpointApprovalContext(checkpoint, step.ToolName) {
 				return contracts.ReasonCodeCheckpointApprovalReferenceInvalid, nil
 			}
 			return "", nil
@@ -698,6 +698,24 @@ func validApprovalContext(
 		approval.ApprovalExecutionVersion <= executionVersion && approval.ToolName == toolName &&
 		approval.ResourceVersion != "" && approval.FrozenInputHash.Valid() &&
 		json.Valid(approval.FrozenToolInput) && json.Valid(approval.ObservedValues)
+}
+
+func validCheckpointApprovalContext(checkpoint RuntimeCheckpoint, toolName contracts.ToolName) bool {
+	approval := checkpoint.ApprovalContext
+	if !validApprovalContext(approval, toolName, checkpoint.ExecutionVersion) {
+		return false
+	}
+	hasSourceVersion := checkpoint.SourceExecutionVersion != nil
+	hasSourceCheckpoint := checkpoint.SourceCheckpointID != nil
+	if hasSourceVersion != hasSourceCheckpoint {
+		return false
+	}
+	if !hasSourceVersion {
+		return approval.ApprovalExecutionVersion == checkpoint.ExecutionVersion
+	}
+	return checkpoint.SourceExecutionVersion.Valid() && *checkpoint.SourceCheckpointID != "" &&
+		*checkpoint.SourceExecutionVersion+1 == checkpoint.ExecutionVersion &&
+		approval.ApprovalExecutionVersion <= *checkpoint.SourceExecutionVersion
 }
 
 func validateStepOutcome(action contracts.CheckpointNextAction, outcome StepOutcome) error {
