@@ -55,6 +55,22 @@ func (s ValidatedRecoverySource) SourceNextAction() contracts.CheckpointNextActi
 	return s.capability.view.Context.NextAction
 }
 
+// SourceCheckpointID 返回已经通过恢复矩阵验证的最大来源 Checkpoint。
+func (s ValidatedRecoverySource) SourceCheckpointID() contracts.CheckpointID {
+	if s.capability == nil {
+		return ""
+	}
+	return s.capability.view.CheckpointID
+}
+
+// SourceExecutionConfigHash 返回最大来源 Checkpoint 的不可变执行配置 Hash。
+func (s ValidatedRecoverySource) SourceExecutionConfigHash() contracts.ExecutionConfigHash {
+	if s.capability == nil {
+		return ""
+	}
+	return s.capability.view.ExecutionConfigHash
+}
+
 // RecoverySourceInvalid 表示来源可安全归属，但最大 Checkpoint 不可恢复。
 type RecoverySourceInvalid struct {
 	CheckpointInvalid

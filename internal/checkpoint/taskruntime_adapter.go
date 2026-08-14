@@ -92,6 +92,62 @@ func (a *TaskRuntimeAdapter) LoadLatestForExecutionDispatch(
 	}
 }
 
+type taskRuntimeRecoverySource struct{ source ValidatedRecoverySource }
+
+func (taskRuntimeRecoverySource) AgentOpsRecoveryCheckpointSource() {}
+
+func (a *TaskRuntimeAdapter) ValidateRecoverySource(
+	ctx context.Context,
+	tx contracts.RuntimeWriteTx,
+	request domain.ValidateRecoveryCheckpointRequest,
+) (domain.RecoveryCheckpointResult, error) {
+	phase := RecoverySourcePhase(0)
+	switch request.Phase {
+	case domain.RecoverySourceBeforeFirstExecution:
+		phase = RecoverySourceBeforeFirstExecution
+	case domain.RecoverySourceStartedExecution:
+		phase = RecoverySourceStartedExecution
+	default:
+		return nil, fmt.Errorf("validate Recovery source: unknown phase: %w", domain.ErrPersistenceInvariantViolation)
+	}
+	result, err := a.manager.ValidateRecoverySource(ctx, tx, RecoverySourceQuery{
+		TaskID: request.TaskID, RunID: request.RunID,
+		SourceExecutionVersion: request.SourceExecutionVersion, Phase: phase,
+	})
+	if err != nil {
+		return nil, err
+	}
+	switch typed := result.(type) {
+	case ValidatedRecoverySource:
+		return domain.RecoveryCheckpointValid{
+			CheckpointID: typed.SourceCheckpointID(), ExecutionConfigHash: typed.SourceExecutionConfigHash(),
+			NextAction: typed.SourceNextAction(), Source: taskRuntimeRecoverySource{source: typed},
+		}, nil
+	case RecoverySourceInvalid:
+		return domain.RecoveryCheckpointInvalid{ReasonCode: typed.ReasonCode}, nil
+	case RecoverySourceInvariantViolation:
+		return domain.RecoveryCheckpointInvariantViolation{ReasonCode: typed.SafeReasonCode}, nil
+	default:
+		return nil, fmt.Errorf("validate Recovery source: unknown result: %w", domain.ErrPersistenceInvariantViolation)
+	}
+}
+
+func (a *TaskRuntimeAdapter) CreateRecoveryStart(
+	ctx context.Context,
+	tx contracts.RuntimeWriteTx,
+	request domain.CreateRecoveryStartRequest,
+) (contracts.CheckpointID, error) {
+	source, ok := request.ValidatedSource.(taskRuntimeRecoverySource)
+	if !ok {
+		return "", fmt.Errorf("create Recovery Start: invalid source capability: %w", domain.ErrPersistenceInvariantViolation)
+	}
+	ref, err := a.manager.CreateRecoveryStart(ctx, tx, RuntimeRecoveryStartRequest{
+		TaskID: request.TaskID, RunID: request.RunID, NewExecutionVersion: request.NewExecutionVersion,
+		ExecutionConfigHash: request.ExecutionConfigHash, ValidatedSource: source.source,
+	})
+	return ref.CheckpointID, err
+}
+
 func saveRequest(request domain.SaveRuntimeCheckpointRequest, draft RuntimeCheckpointDraft) RuntimeCheckpointSaveRequest {
 	return RuntimeCheckpointSaveRequest{
 		TaskID: request.TaskID, RunID: request.RunID, ExecutionVersion: request.ExecutionVersion,
@@ -128,3 +184,4 @@ func runtimeCheckpoint(valid ValidCheckpoint) domain.RuntimeCheckpoint {
 }
 
 var _ domain.RuntimeCheckpointPort = (*TaskRuntimeAdapter)(nil)
+var _ domain.RecoveryCheckpointPort = (*TaskRuntimeAdapter)(nil)

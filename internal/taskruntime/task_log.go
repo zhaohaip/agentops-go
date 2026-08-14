@@ -16,6 +16,7 @@ const (
 	taskLogEventExecutionClaimed     = "ExecutionClaimed"
 	taskLogEventExecutionInterrupted = "ExecutionInterrupted"
 	taskLogEventTaskTerminalized     = "TaskTerminalized"
+	taskLogEventCheckpointRestored   = "CheckpointRestored"
 )
 
 type taskLogDraft struct {
@@ -103,5 +104,22 @@ func terminalTaskLogDraft(
 	return taskLogDraft{
 		taskID: candidate.TaskID, runID: candidate.RunID, executionVersion: candidate.ExecutionVersion,
 		level: TaskLogLevelError, event: taskLogEventTaskTerminalized, message: message,
+	}
+}
+
+func checkpointRestoredTaskLogDraft(
+	taskID contracts.TaskID,
+	runID contracts.RunID,
+	sourceExecutionVersion contracts.ExecutionVersion,
+	newExecutionVersion contracts.ExecutionVersion,
+) taskLogDraft {
+	return taskLogDraft{
+		taskID: taskID, runID: runID, executionVersion: newExecutionVersion,
+		level: TaskLogLevelInfo, event: taskLogEventCheckpointRestored,
+		message: fmt.Sprintf(
+			"checkpoint restored: source_execution_version=%d new_execution_version=%d",
+			sourceExecutionVersion,
+			newExecutionVersion,
+		),
 	}
 }

@@ -22,6 +22,7 @@ type Repositories struct {
 	Receipts   *CommandReceiptRepository
 	TaskLogs   *TaskLogRepository
 	Clock      *DatabaseClock
+	Recovery   *RecoveryRepository
 }
 
 // New 创建 Task Runtime PostgreSQL Repository 集合。
@@ -33,8 +34,83 @@ func New(reader *postgresruntime.ReadPool) *Repositories {
 		Receipts:   &CommandReceiptRepository{reader: reader},
 		TaskLogs:   &TaskLogRepository{},
 		Clock:      &DatabaseClock{},
+		Recovery:   &RecoveryRepository{},
 	}
 }
+
+// RecoveryRepository 实现 P2 Recover 的锁定事实和 GENERATE_PLAN 失败终态 Port。
+type RecoveryRepository struct{}
+
+// LockRecoveryFacts 按 Task、Run、当前 Execution 的依赖顺序取得行锁。
+func (*RecoveryRepository) LockRecoveryFacts(ctx context.Context, token contracts.RuntimeWriteTx,
+	taskID contracts.TaskID) (domain.TerminationFacts, error) {
+	var result domain.TerminationFacts
+	err := withWriteTx(token, func(tx pgx.Tx) error {
+		task, err := scanTask(tx.QueryRow(ctx, taskSelectSQL+" WHERE task_id = $1 FOR UPDATE", taskID))
+		if err != nil {
+			return err
+		}
+		run, err := scanRun(tx.QueryRow(ctx, runSelectSQL+" WHERE task_id = $1 FOR UPDATE", taskID))
+		if err != nil {
+			return err
+		}
+		execution, err := scanTaskExecution(tx.QueryRow(ctx, taskExecutionSelectSQL+
+			" WHERE task_id = $1 AND execution_version = $2 FOR UPDATE", taskID, task.CurrentExecutionVersion))
+		if err != nil {
+			return err
+		}
+		result = domain.TerminationFacts{Task: task, Run: run, Execution: execution}
+		return nil
+	})
+	return result, err
+}
+
+// ApplyRecoveryFailure 原子关闭无 Step/Tool 的 P2 GENERATE_PLAN 恢复现场。
+func (*RecoveryRepository) ApplyRecoveryFailure(ctx context.Context, token contracts.RuntimeWriteTx,
+	request domain.ApplyRecoveryFailureRequest) (bool, error) {
+	var updated bool
+	err := withWriteTx(token, func(tx pgx.Tx) error {
+		var terminationReason any
+		if request.TerminationReason != nil {
+			terminationReason = *request.TerminationReason
+		}
+		tag, err := tx.Exec(ctx, `
+WITH guarded AS (
+    SELECT t.task_id, r.run_id, e.task_execution_id
+    FROM task AS t
+    JOIN run AS r ON r.task_id=t.task_id AND r.run_id=t.current_run_id
+    JOIN task_execution AS e ON e.task_id=t.task_id AND e.execution_version=t.current_execution_version
+    WHERE t.task_id=$1 AND t.current_execution_version=$2
+      AND t.status=$3 AND r.status=$4 AND e.status=$5
+      AND t.status IN ('Pending', 'Running', 'WaitingApproval', 'INTERRUPTED')
+      AND r.status IN ('Pending', 'Running', 'WaitingApproval')
+      AND e.status IN ('QUEUED', 'RUNNING', 'WAITING_APPROVAL', 'INTERRUPTED')
+    FOR UPDATE OF t, r, e
+), task_updated AS (
+    UPDATE task AS t SET status='Failed', error_code=$6, queued_at=NULL, ended_at=$8
+    FROM guarded AS g WHERE t.task_id=g.task_id RETURNING t.task_id
+), run_updated AS (
+    UPDATE run AS r SET status='Failed', error_code=$6, ended_at=$8
+    FROM guarded AS g WHERE r.run_id=g.run_id RETURNING r.run_id
+)
+UPDATE task_execution AS e
+SET status='FAILED',
+    error_code=CASE WHEN e.error_code='CONFIG_VERSION_MISMATCH' THEN e.error_code ELSE $6 END,
+    termination_reason=$7, ended_at=COALESCE(e.ended_at, $8)
+FROM guarded AS g, task_updated, run_updated
+WHERE e.task_execution_id=g.task_execution_id`, request.TaskID, request.ExpectedExecutionVersion,
+			request.ExpectedTaskStatus, request.ExpectedRunStatus, request.ExpectedExecutionStatus,
+			request.ErrorCode, terminationReason, request.EndedAt)
+		if err != nil {
+			return err
+		}
+		updated = tag.RowsAffected() == 1
+		return nil
+	})
+	return updated, err
+}
+
+var _ domain.RecoveryRepository = (*RecoveryRepository)(nil)
 
 // TaskRepository 实现 Task 持久化 Port。
 type TaskRepository struct {

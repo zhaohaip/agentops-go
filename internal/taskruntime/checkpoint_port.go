@@ -123,6 +123,66 @@ type RuntimeCheckpointPort interface {
 	) (ExecutionCheckpointResult, error)
 }
 
+// RecoverySourcePhase 是 Task Runtime 从锁定现场判定的唯一恢复阶段。
+type RecoverySourcePhase uint8
+
+const (
+	RecoverySourceBeforeFirstExecution RecoverySourcePhase = iota + 1
+	RecoverySourceStartedExecution
+)
+
+// RecoveryCheckpointSource 是 Checkpoint Manager 签发并由 Task Runtime 原样回传的同事务能力。
+// 具体实现属于 Checkpoint Adapter，业务代码不得检查或构造其内部状态。
+type RecoveryCheckpointSource interface {
+	AgentOpsRecoveryCheckpointSource()
+}
+
+// RecoveryCheckpointValid 携带恢复所需的已验证、最小来源投影。
+type RecoveryCheckpointValid struct {
+	CheckpointID        contracts.CheckpointID
+	ExecutionConfigHash contracts.ExecutionConfigHash
+	NextAction          contracts.CheckpointNextAction
+	Source              RecoveryCheckpointSource
+}
+
+// RecoveryCheckpointResult 是恢复来源验证的封闭结果。
+type RecoveryCheckpointResult interface{ isRecoveryCheckpointResult() }
+
+func (RecoveryCheckpointValid) isRecoveryCheckpointResult() {}
+
+// RecoveryCheckpointInvalid 表示来源可安全归属，但最大 Checkpoint 不可恢复。
+type RecoveryCheckpointInvalid struct{ ReasonCode contracts.ReasonCode }
+
+func (RecoveryCheckpointInvalid) isRecoveryCheckpointResult() {}
+
+// RecoveryCheckpointInvariantViolation 表示恢复来源的持久化归属不变量已损坏。
+type RecoveryCheckpointInvariantViolation struct{ ReasonCode contracts.CauseCode }
+
+func (RecoveryCheckpointInvariantViolation) isRecoveryCheckpointResult() {}
+
+// ValidateRecoveryCheckpointRequest 固定旧版本来源范围和阶段。
+type ValidateRecoveryCheckpointRequest struct {
+	TaskID                 contracts.TaskID
+	RunID                  contracts.RunID
+	SourceExecutionVersion contracts.ExecutionVersion
+	Phase                  RecoverySourcePhase
+}
+
+// CreateRecoveryStartRequest 固定新版本起点；来源 Context 只能由已验证能力复制。
+type CreateRecoveryStartRequest struct {
+	TaskID              contracts.TaskID
+	RunID               contracts.RunID
+	NewExecutionVersion contracts.ExecutionVersion
+	ExecutionConfigHash contracts.ExecutionConfigHash
+	ValidatedSource     RecoveryCheckpointSource
+}
+
+// RecoveryCheckpointPort 是 RecoverTask 对 Checkpoint 模块的窄事务 Port。
+type RecoveryCheckpointPort interface {
+	ValidateRecoverySource(context.Context, contracts.RuntimeWriteTx, ValidateRecoveryCheckpointRequest) (RecoveryCheckpointResult, error)
+	CreateRecoveryStart(context.Context, contracts.RuntimeWriteTx, CreateRecoveryStartRequest) (contracts.CheckpointID, error)
+}
+
 // ExecutionCheckpointResult 是执行派发所需最大 Checkpoint 的封闭校验结果。
 type ExecutionCheckpointResult interface {
 	isExecutionCheckpointResult()

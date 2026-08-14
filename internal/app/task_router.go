@@ -32,6 +32,7 @@ func NewTaskRouter(dependencies api.TaskHandlerDependencies) (*gin.Engine, error
 	tasks.GET("", handler.List)
 	tasks.GET("/:task_id", handler.Get)
 	tasks.POST("/:task_id/cancel", handler.Cancel)
+	tasks.POST("/:task_id/recover", handler.Recover)
 	return router, nil
 }
 

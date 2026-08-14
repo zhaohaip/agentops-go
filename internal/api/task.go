@@ -29,6 +29,10 @@ type taskCanceller interface {
 	CancelTask(context.Context, taskruntime.CancelTaskRequest) (taskruntime.TaskCancelled, error)
 }
 
+type taskRecoverer interface {
+	RecoverTask(context.Context, taskruntime.RecoverTaskRequest) (taskruntime.TaskRecovered, error)
+}
+
 type taskQuerier interface {
 	GetTask(context.Context, contracts.TaskID) (taskruntime.TaskView, error)
 	ListTasks(context.Context, *contracts.TaskStatus) ([]taskruntime.TaskView, error)
@@ -38,6 +42,7 @@ type taskQuerier interface {
 type TaskHandlerDependencies struct {
 	Creator     taskCreator
 	Canceller   taskCanceller
+	Recoverer   taskRecoverer
 	Querier     taskQuerier
 	BearerToken string
 	OperatorID  string
@@ -48,6 +53,7 @@ type TaskHandlerDependencies struct {
 type TaskHandler struct {
 	creator     taskCreator
 	canceller   taskCanceller
+	recoverer   taskRecoverer
 	querier     taskQuerier
 	bearerToken string
 	operatorID  string
@@ -56,13 +62,55 @@ type TaskHandler struct {
 
 // NewTaskHandler 创建尚未装配到生产 HTTP Server 的 Task Handler。
 func NewTaskHandler(dependencies TaskHandlerDependencies) (*TaskHandler, error) {
-	if dependencies.Creator == nil || dependencies.Canceller == nil || dependencies.Querier == nil ||
+	if dependencies.Creator == nil || dependencies.Canceller == nil || dependencies.Recoverer == nil || dependencies.Querier == nil ||
 		dependencies.BearerToken == "" || dependencies.OperatorID == "" || dependencies.Logger == nil {
 		return nil, errors.New("create Task Handler: dependencies and static identities are required")
 	}
-	return &TaskHandler{creator: dependencies.Creator, canceller: dependencies.Canceller,
+	return &TaskHandler{creator: dependencies.Creator, canceller: dependencies.Canceller, recoverer: dependencies.Recoverer,
 		querier: dependencies.Querier, bearerToken: dependencies.BearerToken,
 		operatorID: dependencies.OperatorID, logger: dependencies.Logger}, nil
+}
+
+type recoverTaskRequest struct {
+	CommandID string `json:"command_id" binding:"required"`
+}
+
+type recoverTaskResponse struct {
+	TaskID                 contracts.TaskID              `json:"task_id"`
+	RunID                  contracts.RunID               `json:"run_id"`
+	SourceExecutionVersion contracts.ExecutionVersion    `json:"source_execution_version"`
+	NewExecutionVersion    contracts.ExecutionVersion    `json:"new_execution_version"`
+	TaskStatus             contracts.TaskStatus          `json:"task_status"`
+	RunStatus              contracts.RunStatus           `json:"run_status"`
+	ExecutionStatus        contracts.TaskExecutionStatus `json:"execution_status"`
+	QueuedAt               time.Time                     `json:"queued_at"`
+	RecoveryCheckpointID   contracts.CheckpointID        `json:"recovery_checkpoint_id"`
+}
+
+// Recover 绑定并处理 POST /v1/tasks/:task_id/recover。
+func (h *TaskHandler) Recover(ginContext *gin.Context) {
+	taskID, ok := bindTaskID(ginContext)
+	if !ok {
+		return
+	}
+	var body recoverTaskRequest
+	if err := bindJSON(ginContext, &body); err != nil {
+		writeError(ginContext, http.StatusBadRequest, "InvalidArgument", "invalid JSON request")
+		return
+	}
+	result, err := h.recoverer.RecoverTask(ginContext.Request.Context(), taskruntime.RecoverTaskRequest{
+		CommandID: taskruntime.CommandID(body.CommandID), TaskID: taskID, OperatorID: h.operatorID,
+	})
+	if err != nil {
+		writeApplicationError(ginContext, err)
+		return
+	}
+	respondJSON(ginContext, http.StatusOK, recoverTaskResponse{
+		TaskID: result.TaskID, RunID: result.RunID, SourceExecutionVersion: result.SourceExecutionVersion,
+		NewExecutionVersion: result.NewExecutionVersion, TaskStatus: result.TaskStatus, RunStatus: result.RunStatus,
+		ExecutionStatus: result.ExecutionStatus, QueuedAt: result.QueuedAt,
+		RecoveryCheckpointID: result.RecoveryCheckpointID,
+	})
 }
 
 // Authenticate 校验静态 Bearer Token，并在失败时终止 Gin Handler 链。
@@ -295,6 +343,12 @@ func writeApplicationError(ginContext *gin.Context, err error) {
 		status, code, message = http.StatusConflict, string(contracts.ErrorCodeTaskTimeout), "Task has timed out"
 	case errors.Is(err, taskruntime.ErrAgentUnavailable):
 		status, code, message = http.StatusUnprocessableEntity, "AgentUnavailable", "Agent is unavailable"
+	case errors.Is(err, taskruntime.ErrRecoverStateConflict):
+		status, code, message = http.StatusConflict, "RecoverStateConflict", "Task is not recoverable"
+	case errors.Is(err, taskruntime.ErrRecoverConfigMismatch):
+		status, code, message = http.StatusConflict, string(contracts.ErrorCodeConfigVersionMismatch), "execution configuration does not match"
+	case errors.Is(err, taskruntime.ErrRecoverCheckpointInvalid):
+		status, code, message = http.StatusConflict, string(contracts.ErrorCodeCheckpointInvalid), "recovery checkpoint is invalid"
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		status, code, message = http.StatusRequestTimeout, "RequestCanceled", "request canceled"
 	}

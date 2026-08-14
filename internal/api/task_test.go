@@ -27,7 +27,7 @@ func TestMain(testingMain *testing.M) {
 	os.Exit(testingMain.Run())
 }
 
-func TestTaskHandlerCreateGetListAndCancel(t *testing.T) {
+func TestTaskHandlerCreateGetListCancelAndRecover(t *testing.T) {
 	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	application := &fakeTaskApplication{
 		created: taskruntime.TaskCreated{TaskID: "task-1", RunID: "run-1", Status: contracts.TaskStatusPending,
@@ -35,6 +35,10 @@ func TestTaskHandlerCreateGetListAndCancel(t *testing.T) {
 		cancelled: taskruntime.TaskCancelled{TaskID: "task-1", TaskStatus: contracts.TaskStatusCancelled,
 			RunStatus: contracts.RunStatusFailed, ExecutionStatus: contracts.TaskExecutionStatusInterrupted,
 			ExecutionVersion: 1, TerminationReason: contracts.TerminationReasonCancelled},
+		recovered: taskruntime.TaskRecovered{TaskID: "task-1", RunID: "run-1",
+			SourceExecutionVersion: 1, NewExecutionVersion: 2, TaskStatus: contracts.TaskStatusPending,
+			RunStatus: contracts.RunStatusPending, ExecutionStatus: contracts.TaskExecutionStatusQueued,
+			QueuedAt: now, RecoveryCheckpointID: "checkpoint-recovery"},
 		view: taskruntime.TaskView{
 			Task: taskruntime.Task{TaskID: "task-1", AgentID: "agent-1", Status: contracts.TaskStatusInterrupted,
 				CurrentRunID: "run-1", CurrentExecutionVersion: 1, DeadlineAt: now.Add(time.Hour), CreatedAt: now},
@@ -83,6 +87,13 @@ func TestTaskHandlerCreateGetListAndCancel(t *testing.T) {
 	}
 	if application.cancelRequest.TaskID != "task-1" || application.cancelRequest.OperatorID != "api-operator" {
 		t.Fatalf("Cancel request = %+v", application.cancelRequest)
+	}
+	response = performRequest(router, http.MethodPost, "/v1/tasks/task-1/recover", `{"command_id":"recover-1"}`, testBearerToken)
+	if response.Code != http.StatusOK {
+		t.Fatalf("Recover status = %d, body = %s", response.Code, response.Body.String())
+	}
+	if application.recoverRequest.TaskID != "task-1" || application.recoverRequest.OperatorID != "api-operator" {
+		t.Fatalf("Recover request = %+v", application.recoverRequest)
 	}
 
 	logged := logs.String()
@@ -139,6 +150,11 @@ func TestTaskHandlerRejectsRawInvalidUTF8BeforeService(t *testing.T) {
 			body: append(append([]byte(`{"command_id":"create-invalid","agent_id":"agent-1","input":"`), 0xff),
 				[]byte(`"}`)...),
 			serviceHit: func(application *fakeTaskApplication) int { return application.createCalls },
+		},
+		{
+			name: "Recover", method: http.MethodPost, path: "/v1/tasks/task-1/recover",
+			body:       append(append([]byte(`{"command_id":"recover-`), 0xff), []byte(`"}`)...),
+			serviceHit: func(application *fakeTaskApplication) int { return application.recoverCalls },
 		},
 		{
 			name:   "Cancel",
@@ -228,6 +244,9 @@ func TestTaskHandlerMapsApplicationErrorsWithoutDisclosure(t *testing.T) {
 		{name: "terminal", err: taskruntime.ErrTaskAlreadyTerminal, want: http.StatusConflict, code: "TaskAlreadyTerminal"},
 		{name: "timeout", err: taskruntime.ErrTaskTimedOut, want: http.StatusConflict, code: string(contracts.ErrorCodeTaskTimeout)},
 		{name: "unavailable", err: taskruntime.ErrAgentUnavailable, want: http.StatusUnprocessableEntity, code: "AgentUnavailable"},
+		{name: "recover state", err: taskruntime.ErrRecoverStateConflict, want: http.StatusConflict, code: "RecoverStateConflict"},
+		{name: "recover config", err: taskruntime.ErrRecoverConfigMismatch, want: http.StatusConflict, code: string(contracts.ErrorCodeConfigVersionMismatch)},
+		{name: "recover checkpoint", err: taskruntime.ErrRecoverCheckpointInvalid, want: http.StatusConflict, code: string(contracts.ErrorCodeCheckpointInvalid)},
 		{name: "canceled", err: context.Canceled, want: http.StatusRequestTimeout, code: "RequestCanceled"},
 		{name: "system", err: errors.New("postgres password=never-log-this"), want: http.StatusInternalServerError, code: "InternalError"},
 	}
@@ -250,7 +269,7 @@ func newTaskRouter(t *testing.T, application *fakeTaskApplication) (http.Handler
 	t.Helper()
 	var logs bytes.Buffer
 	router, err := app.NewTaskRouter(api.TaskHandlerDependencies{
-		Creator: application, Canceller: application, Querier: application,
+		Creator: application, Canceller: application, Recoverer: application, Querier: application,
 		BearerToken: testBearerToken, OperatorID: "api-operator",
 		Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
 	})
@@ -290,11 +309,21 @@ type fakeTaskApplication struct {
 	cancelErr      error
 	cancelRequest  taskruntime.CancelTaskRequest
 	cancelCalls    int
+	recovered      taskruntime.TaskRecovered
+	recoverErr     error
+	recoverRequest taskruntime.RecoverTaskRequest
+	recoverCalls   int
 	view           taskruntime.TaskView
 	views          []taskruntime.TaskView
 	queryErr       error
 	listStatus     *contracts.TaskStatus
 	requestContext context.Context
+}
+
+func (f *fakeTaskApplication) RecoverTask(_ context.Context, request taskruntime.RecoverTaskRequest) (taskruntime.TaskRecovered, error) {
+	f.recoverCalls++
+	f.recoverRequest = request
+	return f.recovered, f.recoverErr
 }
 
 func (f *fakeTaskApplication) CreateTask(ctx context.Context, request taskruntime.CreateTaskRequest) (taskruntime.TaskCreated, error) {
