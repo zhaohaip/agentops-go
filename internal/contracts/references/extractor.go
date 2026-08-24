@@ -29,6 +29,9 @@ var (
 	ErrInvalidStepInput = errors.New("step input is invalid")
 	// ErrReferenceSyntax 表示保留引用前缀被用于非法模板、拼接或多级字段。
 	ErrReferenceSyntax = errors.New("step reference syntax is invalid")
+	// ErrExpressionNotSupported 表示引用被包裹在模板、函数或条件表达式中。
+	// 它保留 ErrReferenceSyntax 的 errors.Is 兼容性，供需要更细稳定分类的调用方使用。
+	ErrExpressionNotSupported = fmt.Errorf("%w: expression is not supported", ErrReferenceSyntax)
 	// ErrReferencePath 表示引用 target_path 为空或超过冻结深度。
 	ErrReferencePath = errors.New("step reference target path is invalid")
 	// ErrDuplicateTarget 表示同一 target_path 出现重复引用。
@@ -283,8 +286,10 @@ func parseReference(value string) (string, bool, error) {
 	switch class {
 	case referenceStringLegal:
 		return field, true, nil
-	case referenceStringReservedPrefixInvalid, referenceStringExpression:
+	case referenceStringReservedPrefixInvalid:
 		return "", false, ErrReferenceSyntax
+	case referenceStringExpression:
+		return "", false, ErrExpressionNotSupported
 	default:
 		return "", false, nil
 	}

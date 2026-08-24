@@ -186,6 +186,18 @@ func TestClassifyReferenceStringFourExclusiveClasses(t *testing.T) {
 	}
 }
 
+func TestExpressionErrorRefinesSyntaxWithoutBreakingCompatibility(t *testing.T) {
+	t.Parallel()
+	request := validRequest(json.RawMessage(`{"value":"namespace.fn (step.output.alpha)"}`))
+	_, err := NewStepReferenceExtractor().Extract(request)
+	if !errors.Is(err, ErrExpressionNotSupported) {
+		t.Fatalf("Extract() error = %v, want ErrExpressionNotSupported", err)
+	}
+	if !errors.Is(err, ErrReferenceSyntax) {
+		t.Fatalf("Extract() error = %v, want ErrReferenceSyntax compatibility", err)
+	}
+}
+
 func TestExtractorRejectsDuplicateTargetDeterministically(t *testing.T) {
 	t.Parallel()
 
