@@ -83,6 +83,12 @@ func TestValidatorEmitsEveryStableIssueCode(t *testing.T) {
 			d.Steps[0].Input = mustStepInput(tPlaceholder{}, objectWithFields(maxObjectFields+1))
 		})},
 		{name: "issue count", code: ValidationIssueValidationIssueLimitExceeded, build: issueLimitValidationRequest},
+		{name: "sensitive content", code: ValidationIssueSensitiveContentDetected, build: mutateMinimal(func(d *PlanDraft) {
+			d.Steps[0].Input = mustStepInput(tPlaceholder{}, `{"criteria":"Bearer secret-value","evidence":{}}`)
+		})},
+		{name: "unsafe persistable content", code: ValidationIssueUnsafePersistableContent, build: mutateMinimal(func(d *PlanDraft) {
+			d.Steps[0].Name = "unsafe\nname"
+		})},
 	}
 
 	for _, test := range tests {

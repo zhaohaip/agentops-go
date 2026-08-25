@@ -50,6 +50,8 @@ const (
 	ValidationIssueJSONDepthExceeded              ValidationIssueCode = "JSON_DEPTH_EXCEEDED"
 	ValidationIssueObjectFieldLimitExceeded       ValidationIssueCode = "OBJECT_FIELD_LIMIT_EXCEEDED"
 	ValidationIssueValidationIssueLimitExceeded   ValidationIssueCode = "VALIDATION_ISSUE_LIMIT_EXCEEDED"
+	ValidationIssueSensitiveContentDetected       ValidationIssueCode = "SENSITIVE_CONTENT_DETECTED"
+	ValidationIssueUnsafePersistableContent       ValidationIssueCode = "UNSAFE_PERSISTABLE_CONTENT"
 )
 
 // Valid 报告错误码是否属于 P3-T03 静态 Validator 的封闭集合。
@@ -69,7 +71,8 @@ func (c ValidationIssueCode) Valid() bool {
 		ValidationIssuePlanStepLimitExceeded, ValidationIssuePlanDraftTooLarge,
 		ValidationIssuePlanGoalTooLong, ValidationIssueStepNameTooLong,
 		ValidationIssueStepInputTooLarge, ValidationIssueJSONDepthExceeded,
-		ValidationIssueObjectFieldLimitExceeded, ValidationIssueValidationIssueLimitExceeded:
+		ValidationIssueObjectFieldLimitExceeded, ValidationIssueValidationIssueLimitExceeded,
+		ValidationIssueSensitiveContentDetected, ValidationIssueUnsafePersistableContent:
 		return true
 	default:
 		return false
@@ -129,6 +132,9 @@ func (v Validator) Validate(request ValidatePlanRequest) []ValidationIssue {
 		validateStepSemantics(v.referenceExtractor, request.Draft.Steps, index, stepOrder, tools, allowedTools, add)
 	}
 	validateDraftResourceLimits(request.Draft, add)
+	for _, issue := range NewSafeResultProcessor().Validate(request.Draft) {
+		issues = append(issues, orderedValidationIssue{issue: issue})
+	}
 
 	sort.SliceStable(issues, func(left, right int) bool {
 		if issues[left].stepOrder != issues[right].stepOrder {
