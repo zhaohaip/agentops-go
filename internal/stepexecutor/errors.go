@@ -16,6 +16,7 @@ const (
 	CauseRuntimeStaticToolSnapshotInconsistent CauseCode = "RUNTIME_STATIC_TOOL_SNAPSHOT_INCONSISTENT"
 	CausePersistenceInvariantViolation         CauseCode = "PersistenceInvariantViolation"
 	CauseReferenceCountLimitExceeded           CauseCode = "REFERENCE_COUNT_LIMIT_EXCEEDED"
+	CauseInputResolutionFailed                 CauseCode = "InputResolutionFailed"
 	CauseTaskCancelled                         CauseCode = "TASK_CANCELLED"
 	CauseTaskTimedOut                          CauseCode = "TASK_TIMED_OUT"
 	CauseActionTimeout                         CauseCode = "ACTION_TIMEOUT"
@@ -37,6 +38,7 @@ func (c CauseCode) Valid() bool {
 	case CauseStepExecutorContractBroken, CauseRuntimeInvalidModelClientRequest,
 		CauseRuntimeStaticToolSnapshotInconsistent, CausePersistenceInvariantViolation,
 		CauseReferenceCountLimitExceeded,
+		CauseInputResolutionFailed,
 		CauseTaskCancelled, CauseTaskTimedOut, CauseActionTimeout, CauseRuntimeShutdown,
 		CauseLockLost, CauseStaleExecution, CauseModelTimeout, CauseModelAuthentication,
 		CauseModelNetwork, CauseModelRateLimited, CauseModelProviderError,
