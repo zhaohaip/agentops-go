@@ -12,8 +12,11 @@ import (
 var errFakePortContract = errors.New("fake dependency Port contract violation")
 
 type fakeModelResult struct {
-	response contracts.ModelResponse
-	err      error
+	response           contracts.ModelResponse
+	err                error
+	beforeReturn       func()
+	started            chan<- context.Context
+	waitForContextDone bool
 }
 
 type fakeModelCall struct {
@@ -33,15 +36,25 @@ func (f *fakeModelClient) GenerateStructured(
 	request contracts.ModelRequest,
 ) (contracts.ModelResponse, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	f.calls = append(f.calls, fakeModelCall{
 		context: ctx, request: cloneModelRequest(request), contextCanceled: contextCanceled(ctx),
 	})
 	if len(f.results) == 0 {
+		f.mu.Unlock()
 		return contracts.ModelResponse{}, errFakePortContract
 	}
 	result := f.results[0]
 	f.results = f.results[1:]
+	f.mu.Unlock()
+	if result.started != nil {
+		result.started <- ctx
+	}
+	if result.waitForContextDone {
+		<-ctx.Done()
+	}
+	if result.beforeReturn != nil {
+		result.beforeReturn()
+	}
 	return cloneModelResponse(result.response), result.err
 }
 

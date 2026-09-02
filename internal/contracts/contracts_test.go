@@ -234,8 +234,9 @@ func TestEnumClosureAndTerminalSemantics(t *testing.T) {
 	allErrorCodes := []ErrorCode{
 		ErrorCodeTaskCancelled, ErrorCodeTaskTimeout, ErrorCodeConfigVersionMismatch,
 		ErrorCodeDataInconsistent, ErrorCodeCheckpointInvalid, ErrorCodePlanGenerationFailed,
-		ErrorCodePlanValidationFailed, ErrorCodeInputResolutionFailed, ErrorCodeModelCallFailed,
-		ErrorCodeModelOutputInvalid, ErrorCodeResultSanitizationFailed, ErrorCodeStepOutputInvalid,
+		ErrorCodePlanValidationFailed, ErrorCodeInputResolutionFailed, ErrorCodeModelInputTooLarge,
+		ErrorCodeModelCallFailed, ErrorCodeModelOutputInvalid, ErrorCodeResultSanitizationFailed,
+		ErrorCodeStepOutputInvalid,
 		ErrorCodeStepOutputTooLarge, ErrorCodeToolNotFound, ErrorCodeToolDisabled,
 		ErrorCodeToolNotAuthorized, ErrorCodeToolInputInvalid, ErrorCodeToolAccessDenied,
 		ErrorCodeToolTimeout, ErrorCodeToolConnectionLost, ErrorCodeToolCallFailed,

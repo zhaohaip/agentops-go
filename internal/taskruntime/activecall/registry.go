@@ -29,29 +29,16 @@ const (
 	StateActive   State = "ACTIVE"
 )
 
-// CancellationCause 是 Active Call 接受的封闭取消原因。
-type CancellationCause string
+// CancellationCause 是共享执行契约定义的封闭取消原因。
+type CancellationCause = contracts.ExecutionCancellationCause
 
 const (
-	CauseTaskCancelled   CancellationCause = "TASK_CANCELLED"
-	CauseTaskTimedOut    CancellationCause = "TASK_TIMED_OUT"
-	CauseActionTimeout   CancellationCause = "ACTION_TIMEOUT"
-	CauseRuntimeShutdown CancellationCause = "RUNTIME_SHUTDOWN"
-	CauseLockLost        CancellationCause = "LOCK_LOST"
+	CauseTaskCancelled   = contracts.ExecutionCancellationCauseTaskCancelled
+	CauseTaskTimedOut    = contracts.ExecutionCancellationCauseTaskTimedOut
+	CauseActionTimeout   = contracts.ExecutionCancellationCauseActionTimeout
+	CauseRuntimeShutdown = contracts.ExecutionCancellationCauseRuntimeShutdown
+	CauseLockLost        = contracts.ExecutionCancellationCauseLockLost
 )
-
-// Error 使取消原因可通过 context.Cause 传播。
-func (c CancellationCause) Error() string { return string(c) }
-
-// Valid 报告原因是否属于冻结集合。
-func (c CancellationCause) Valid() bool {
-	switch c {
-	case CauseTaskCancelled, CauseTaskTimedOut, CauseActionTimeout, CauseRuntimeShutdown, CauseLockLost:
-		return true
-	default:
-		return false
-	}
-}
 
 // Key 唯一标识某个 Worker 当前拥有的执行版本。
 type Key struct {

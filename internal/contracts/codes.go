@@ -12,6 +12,7 @@ const (
 	ErrorCodePlanGenerationFailed                  ErrorCode = "PlanGenerationFailed"
 	ErrorCodePlanValidationFailed                  ErrorCode = "PlanValidationFailed"
 	ErrorCodeInputResolutionFailed                 ErrorCode = "InputResolutionFailed"
+	ErrorCodeModelInputTooLarge                    ErrorCode = "ModelInputTooLarge"
 	ErrorCodeModelCallFailed                       ErrorCode = "ModelCallFailed"
 	ErrorCodeModelOutputInvalid                    ErrorCode = "ModelOutputInvalid"
 	ErrorCodeResultSanitizationFailed              ErrorCode = "ResultSanitizationFailed"
@@ -41,7 +42,8 @@ func (c ErrorCode) Valid() bool {
 	switch c {
 	case ErrorCodeTaskCancelled, ErrorCodeTaskTimeout, ErrorCodeConfigVersionMismatch, ErrorCodeDataInconsistent,
 		ErrorCodeCheckpointInvalid, ErrorCodePlanGenerationFailed, ErrorCodePlanValidationFailed,
-		ErrorCodeInputResolutionFailed, ErrorCodeModelCallFailed, ErrorCodeModelOutputInvalid,
+		ErrorCodeInputResolutionFailed, ErrorCodeModelInputTooLarge, ErrorCodeModelCallFailed,
+		ErrorCodeModelOutputInvalid,
 		ErrorCodeResultSanitizationFailed, ErrorCodeStepOutputInvalid, ErrorCodeStepOutputTooLarge,
 		ErrorCodeToolNotFound, ErrorCodeToolDisabled, ErrorCodeToolNotAuthorized, ErrorCodeToolInputInvalid,
 		ErrorCodeToolAccessDenied, ErrorCodeToolTimeout, ErrorCodeToolConnectionLost, ErrorCodeToolCallFailed,

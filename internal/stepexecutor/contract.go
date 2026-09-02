@@ -189,7 +189,7 @@ func ValidateStepOutcome(outcome StepOutcome) bool {
 			value.ErrorCode == contracts.ErrorCodeCheckpointInvalid &&
 			value.ReportStatus == contracts.ReportStatusPending
 	case StepOutcomeFailed:
-		return value.ErrorCode.Valid() && value.CauseCode.Valid() && value.SafeSummary != "" &&
+		return validFailedPair(value.ErrorCode, value.CauseCode) && value.SafeSummary != "" &&
 			validToolOutcome(value.ToolExecutionID, value.ToolResultUpdate, value.SideEffectUnknown)
 	case StepOutcomeStale:
 		return value.CauseCode.Stale()

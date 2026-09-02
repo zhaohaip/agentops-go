@@ -17,11 +17,11 @@ const (
 	CausePersistenceInvariantViolation         CauseCode = "PersistenceInvariantViolation"
 	CauseReferenceCountLimitExceeded           CauseCode = "REFERENCE_COUNT_LIMIT_EXCEEDED"
 	CauseInputResolutionFailed                 CauseCode = "InputResolutionFailed"
-	CauseTaskCancelled                         CauseCode = "TASK_CANCELLED"
-	CauseTaskTimedOut                          CauseCode = "TASK_TIMED_OUT"
-	CauseActionTimeout                         CauseCode = "ACTION_TIMEOUT"
-	CauseRuntimeShutdown                       CauseCode = "RUNTIME_SHUTDOWN"
-	CauseLockLost                              CauseCode = "LOCK_LOST"
+	CauseTaskCancelled                         CauseCode = CauseCode(contracts.ExecutionCancellationCauseTaskCancelled)
+	CauseTaskTimedOut                          CauseCode = CauseCode(contracts.ExecutionCancellationCauseTaskTimedOut)
+	CauseActionTimeout                         CauseCode = CauseCode(contracts.ExecutionCancellationCauseActionTimeout)
+	CauseRuntimeShutdown                       CauseCode = CauseCode(contracts.ExecutionCancellationCauseRuntimeShutdown)
+	CauseLockLost                              CauseCode = CauseCode(contracts.ExecutionCancellationCauseLockLost)
 	CauseStaleExecution                        CauseCode = "STALE_EXECUTION"
 	CauseModelTimeout                          CauseCode = "MODEL_TIMEOUT"
 	CauseModelAuthentication                   CauseCode = "MODEL_AUTHENTICATION"
@@ -30,6 +30,9 @@ const (
 	CauseModelProviderError                    CauseCode = "MODEL_PROVIDER_ERROR"
 	CauseModelResponseTooLarge                 CauseCode = "MODEL_RESPONSE_TOO_LARGE"
 	CauseModelOutputInvalid                    CauseCode = "MODEL_OUTPUT_INVALID"
+	CauseModelInputTooLarge                    CauseCode = "MODEL_INPUT_TOO_LARGE"
+	CauseResultSanitizationFailed              CauseCode = CauseCode(contracts.CauseCodeResultSanitizationFailed)
+	CauseStepOutputTooLarge                    CauseCode = CauseCode(contracts.CauseCodeStepOutputTooLarge)
 )
 
 // Valid 报告原因码是否属于冻结集合。
@@ -42,7 +45,8 @@ func (c CauseCode) Valid() bool {
 		CauseTaskCancelled, CauseTaskTimedOut, CauseActionTimeout, CauseRuntimeShutdown,
 		CauseLockLost, CauseStaleExecution, CauseModelTimeout, CauseModelAuthentication,
 		CauseModelNetwork, CauseModelRateLimited, CauseModelProviderError,
-		CauseModelResponseTooLarge, CauseModelOutputInvalid:
+		CauseModelResponseTooLarge, CauseModelOutputInvalid, CauseModelInputTooLarge,
+		CauseResultSanitizationFailed, CauseStepOutputTooLarge:
 		return true
 	default:
 		return false
@@ -172,6 +176,13 @@ func validRuntimeFatalPair(errorCode contracts.ErrorCode, causeCode CauseCode) b
 		return causeCode == CausePersistenceInvariantViolation
 	}
 	return false
+}
+
+func validFailedPair(errorCode contracts.ErrorCode, causeCode CauseCode) bool {
+	if errorCode == contracts.ErrorCodeModelInputTooLarge || causeCode == CauseModelInputTooLarge {
+		return errorCode == contracts.ErrorCodeModelInputTooLarge && causeCode == CauseModelInputTooLarge
+	}
+	return errorCode.Valid() && causeCode.Valid()
 }
 
 // MapToolRuntimeFatal 把 Tool Framework 的类型化 RuntimeFatal 映射到系统错误通道。

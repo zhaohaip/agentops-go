@@ -100,6 +100,15 @@ func TestStepOutcomeUnionBranchesAndPayloadValidation(t *testing.T) {
 			kind: contracts.StepOutcomeFailed,
 		},
 		{
+			name: "model input too large",
+			outcome: StepOutcomeFailed{
+				ErrorCode:   contracts.ErrorCodeModelInputTooLarge,
+				CauseCode:   CauseModelInputTooLarge,
+				SafeSummary: "Model input exceeds the limit.",
+			},
+			kind: contracts.StepOutcomeFailed,
+		},
+		{
 			name:    "stale",
 			outcome: StepOutcomeStale{CauseCode: CauseStaleExecution},
 			kind:    contracts.StepOutcomeStale,
@@ -126,6 +135,16 @@ func TestStepOutcomeUnionBranchesAndPayloadValidation(t *testing.T) {
 		},
 		StepOutcomeFailed{
 			ErrorCode: contracts.ErrorCodeToolCallFailed, CauseCode: "UNKNOWN", SafeSummary: "safe",
+		},
+		StepOutcomeFailed{
+			ErrorCode:   contracts.ErrorCodeModelInputTooLarge,
+			CauseCode:   CauseModelTimeout,
+			SafeSummary: "safe",
+		},
+		StepOutcomeFailed{
+			ErrorCode:   contracts.ErrorCodeModelCallFailed,
+			CauseCode:   CauseModelInputTooLarge,
+			SafeSummary: "safe",
 		},
 		StepOutcomeStale{CauseCode: CauseModelTimeout},
 	}
@@ -318,5 +337,20 @@ func TestReferenceCountLimitExceededIsFrozenContractRuntimeFatal(t *testing.T) {
 		mapped.ErrorCode != contracts.ErrorCodeStepExecutorContractBroken ||
 		mapped.CauseCode != CauseReferenceCountLimitExceeded {
 		t.Fatalf("reference count RuntimeFatal mapping = %+v", mapped)
+	}
+}
+
+func TestModelInputTooLargeUsesFrozenFailedPair(t *testing.T) {
+	if contracts.ErrorCodeModelInputTooLarge != "ModelInputTooLarge" ||
+		CauseModelInputTooLarge != "MODEL_INPUT_TOO_LARGE" {
+		t.Fatalf("model input limit pair = %q/%q",
+			contracts.ErrorCodeModelInputTooLarge, CauseModelInputTooLarge)
+	}
+	if !validFailedPair(contracts.ErrorCodeModelInputTooLarge, CauseModelInputTooLarge) {
+		t.Fatal("ModelInputTooLarge frozen pair was rejected")
+	}
+	if validFailedPair(contracts.ErrorCodeModelInputTooLarge, CauseModelTimeout) ||
+		validFailedPair(contracts.ErrorCodeModelCallFailed, CauseModelInputTooLarge) {
+		t.Fatal("mismatched ModelInputTooLarge pair was accepted")
 	}
 }
