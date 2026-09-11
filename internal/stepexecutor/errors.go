@@ -17,6 +17,7 @@ const (
 	CausePersistenceInvariantViolation         CauseCode = "PersistenceInvariantViolation"
 	CauseReferenceCountLimitExceeded           CauseCode = "REFERENCE_COUNT_LIMIT_EXCEEDED"
 	CauseInputResolutionFailed                 CauseCode = "InputResolutionFailed"
+	CauseTaskTimeout                           CauseCode = CauseCode(contracts.CauseCodeTaskTimeout)
 	CauseTaskCancelled                         CauseCode = CauseCode(contracts.ExecutionCancellationCauseTaskCancelled)
 	CauseTaskTimedOut                          CauseCode = CauseCode(contracts.ExecutionCancellationCauseTaskTimedOut)
 	CauseActionTimeout                         CauseCode = CauseCode(contracts.ExecutionCancellationCauseActionTimeout)
@@ -32,7 +33,16 @@ const (
 	CauseModelOutputInvalid                    CauseCode = "MODEL_OUTPUT_INVALID"
 	CauseModelInputTooLarge                    CauseCode = "MODEL_INPUT_TOO_LARGE"
 	CauseResultSanitizationFailed              CauseCode = CauseCode(contracts.CauseCodeResultSanitizationFailed)
+	CauseStepOutputInvalid                     CauseCode = CauseCode(contracts.CauseCodeStepOutputInvalid)
 	CauseStepOutputTooLarge                    CauseCode = CauseCode(contracts.CauseCodeStepOutputTooLarge)
+	CauseToolNotFound                          CauseCode = CauseCode(contracts.CauseCodeToolNotFound)
+	CauseToolDisabled                          CauseCode = CauseCode(contracts.CauseCodeToolDisabled)
+	CauseToolNotAuthorized                     CauseCode = CauseCode(contracts.CauseCodeToolNotAuthorized)
+	CauseToolInputInvalid                      CauseCode = CauseCode(contracts.CauseCodeToolInputInvalid)
+	CauseToolAccessDenied                      CauseCode = CauseCode(contracts.CauseCodeToolAccessDenied)
+	CauseToolTimeout                           CauseCode = CauseCode(contracts.CauseCodeToolTimeout)
+	CauseToolConnectionLost                    CauseCode = CauseCode(contracts.CauseCodeToolConnectionLost)
+	CauseToolCallFailed                        CauseCode = CauseCode(contracts.CauseCodeToolCallFailed)
 )
 
 // Valid 报告原因码是否属于冻结集合。
@@ -41,12 +51,14 @@ func (c CauseCode) Valid() bool {
 	case CauseStepExecutorContractBroken, CauseRuntimeInvalidModelClientRequest,
 		CauseRuntimeStaticToolSnapshotInconsistent, CausePersistenceInvariantViolation,
 		CauseReferenceCountLimitExceeded,
-		CauseInputResolutionFailed,
+		CauseInputResolutionFailed, CauseTaskTimeout,
 		CauseTaskCancelled, CauseTaskTimedOut, CauseActionTimeout, CauseRuntimeShutdown,
 		CauseLockLost, CauseStaleExecution, CauseModelTimeout, CauseModelAuthentication,
 		CauseModelNetwork, CauseModelRateLimited, CauseModelProviderError,
 		CauseModelResponseTooLarge, CauseModelOutputInvalid, CauseModelInputTooLarge,
-		CauseResultSanitizationFailed, CauseStepOutputTooLarge:
+		CauseResultSanitizationFailed, CauseStepOutputInvalid, CauseStepOutputTooLarge,
+		CauseToolNotFound, CauseToolDisabled, CauseToolNotAuthorized, CauseToolInputInvalid,
+		CauseToolAccessDenied, CauseToolTimeout, CauseToolConnectionLost, CauseToolCallFailed:
 		return true
 	default:
 		return false

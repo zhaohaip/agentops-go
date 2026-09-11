@@ -250,7 +250,7 @@ func modelStepCancellation(ctx context.Context) *StepError {
 	if ctx == nil || ctx.Err() == nil {
 		return nil
 	}
-	cause := modelStepCancellationCode(context.Cause(ctx), ctx.Err())
+	cause := executionCancellationCode(context.Cause(ctx), ctx.Err())
 	switch cause {
 	case CauseTaskCancelled, CauseTaskTimedOut, CauseRuntimeShutdown, CauseLockLost:
 		return newStepError(ErrorKindStale, "", cause, ctx.Err())
@@ -263,7 +263,7 @@ func modelStepCancellation(ctx context.Context) *StepError {
 	}
 }
 
-func modelStepCancellationCode(cause error, sentinel error) CauseCode {
+func executionCancellationCode(cause error, sentinel error) CauseCode {
 	if code, ok := contracts.ExecutionCancellationCauseFrom(cause); ok {
 		return CauseCode(code)
 	}
